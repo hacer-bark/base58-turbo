@@ -18,6 +18,7 @@ b58 = "0.1"
 bs58 = "0.5"
 bsv58 = "0.1"
 base58 = "0.2"
+five8 = "1"
 base58-turbo = { path = "." }
 
 [[bench]]

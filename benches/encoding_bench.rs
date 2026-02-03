@@ -7,6 +7,7 @@ use rand::Rng;
 use std::env;
 use std::time::Duration;
 
+// 0. Turbo code
 use base58_turbo::*;
 // 1. The bs58
 use bs58::{encode as encode_std, decode as decode_std, Alphabet as AlphabetStd};
@@ -16,6 +17,8 @@ use base58::{FromBase58, ToBase58};
 use bsv58::{encode as encode_simd, decode as decode_simd};
 // 4. The b58
 use b58::{encode as encode_b58, decode as decode_b58};
+// 5. The five8
+use five8::{decode_32, decode_64, encode_32, encode_64};
 
 fn generate_random_data(size: usize) -> Vec<u8> {
     let mut data = vec![0u8; size];
@@ -43,7 +46,7 @@ fn bench_comparison(c: &mut Criterion) {
     group.noise_threshold(0.05);
     group.sample_size(50);
 
-    let sizes = [16, 24, 32, 64, 128, 256, 512];
+    let sizes = [16, 24, 25, 32, 64, 69, 128, 256];
 
     for size in sizes.iter() {
         let input_data = generate_random_data(*size);
@@ -53,7 +56,7 @@ fn bench_comparison(c: &mut Criterion) {
         // ======================================================================
         group.throughput(Throughput::Bytes(*size as u64));
 
-        // 1a. Base64 Turbo (Allocating)
+        // 1a. Base58 Turbo (Allocating)
         if should_run("turbo") {
             group.bench_with_input(BenchmarkId::new("Encode/Turbo", size), &input_data, |b, d| {
                 b.iter(|| {
@@ -95,6 +98,32 @@ fn bench_comparison(c: &mut Criterion) {
         if should_run("vbs58") {
             group.bench_with_input(BenchmarkId::new("Encode/vbs58", size), &input_data, |b, d| {
                 b.iter(|| encode_simd(black_box(d)))
+            });
+        }
+
+        // 5. five8-32 "non-general code"
+        if should_run("five8") && *size == 32 {
+            group.bench_with_input(BenchmarkId::new("Encode/five8", size), &input_data, |b, d| {
+                b.iter(|| {
+                    let mut buffer = [0u8; 44];
+                    let static_bytes: [u8; 32] = d.as_slice().try_into().unwrap();
+                    encode_32(&black_box(static_bytes), &mut buffer);
+
+                    black_box(buffer);
+                })
+            });
+        }
+
+        // 5. five8-64 "non-general code"
+        if should_run("five8") && *size == 64 {
+            group.bench_with_input(BenchmarkId::new("Encode/five8", size), &input_data, |b, d| {
+                b.iter(|| {
+                    let mut buffer = [0u8; 88];
+                    let static_bytes: [u8; 64] = d.as_slice().try_into().unwrap();
+                    encode_64(&black_box(static_bytes), &mut buffer);
+
+                    black_box(buffer);
+                })
             });
         }
     }
