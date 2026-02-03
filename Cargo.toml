@@ -1,0 +1,40 @@
+[package]
+name = "base58-turbo"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+readme = "README.md"
+authors = ["Hacer"]
+
+[features]
+default = ["std", "simd"]
+std = []
+simd = ["std"]
+
+[dev-dependencies]
+rand = "0.9"
+criterion = { version = "0.7", features = ["html_reports"] }
+b58 = "0.1"
+bs58 = "0.5"
+bsv58 = "0.1"
+base58 = "0.2"
+base58-turbo = { path = "." }
+
+[[bench]]
+name = "encoding_bench"
+harness = false
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true 
+
+[profile.bench]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
