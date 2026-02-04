@@ -1,9 +1,5 @@
 const ALPHABET: [u8; 58] = *b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 
-// Base 58^10 (~4.3 * 10^17)
-const RADIX_10: u64 = 430_804_206_899_405_824;
-const RADIX_128: u128 = RADIX_10 as u128;
-
 // 58^4 = 11,316,496
 const RADIX_58_4: u64 = 11_316_496;
 
@@ -518,34 +514,149 @@ unsafe fn process_fixed_69(src: *const u8, out_digits: &mut [u64]) -> usize {
 }
 
 /// General arithmetic kernel for variable lengths.
-/// Writes results into `out_digits` and returns the number of digits used.
+/// Optimizations:
+/// 1. Uses Base 58^5 internally (u32 digits) for fast u64 math.
+/// 2. "Smart Jump-Start": Chooses the largest fixed-size acceleration (64 or 32 bytes)
+///    to initialize the bignum state instantly.
+/// 3. Processes remaining input in u32 chunks.
+/// 4. Packs result into Base 58^10 (u64) at the end.
 #[inline(always)]
 unsafe fn process_general(mut src: *const u8, mut len: usize, out_digits: &mut [u64]) -> usize {
-    let mut count = 1;
+    // Buffer for Base 58^5 digits (u32).
+    let mut digits_5 = [0u32; 300];
+    let mut count_5 = 1;
 
     unsafe {
-        // Process in 8-byte chunks (u64)
-        while len >= 8 {
-            let chunk = (src as *const u64).read_unaligned().to_be();
-            let mut carry = chunk as u128;
-            let mut i = 0;
+        // ---------------------------------------------------------
+        // Smart Jump-Start: Choose the fastest initialization path
+        // ---------------------------------------------------------
+        if len >= 64 {
+            // --- 64-Byte Fast Path ---
+            // 1. Read 16x u32 chunks (Big Endian)
+            let mut input = [0u32; 16];
             
-            while i < count {
-                let val = (*out_digits.get_unchecked(i) as u128) * (1u128 << 64) + carry;
-                *out_digits.get_unchecked_mut(i) = (val % RADIX_128) as u64;
-                carry = val / RADIX_128;
+            // Unrolled read using u64 loads for speed
+            let s_u64 = src as *const u64;
+            let v0 = s_u64.read_unaligned().to_be(); input[0] = (v0 >> 32) as u32; input[1] = v0 as u32;
+            let v1 = s_u64.add(1).read_unaligned().to_be(); input[2] = (v1 >> 32) as u32; input[3] = v1 as u32;
+            let v2 = s_u64.add(2).read_unaligned().to_be(); input[4] = (v2 >> 32) as u32; input[5] = v2 as u32;
+            let v3 = s_u64.add(3).read_unaligned().to_be(); input[6] = (v3 >> 32) as u32; input[7] = v3 as u32;
+            let v4 = s_u64.add(4).read_unaligned().to_be(); input[8] = (v4 >> 32) as u32; input[9] = v4 as u32;
+            let v5 = s_u64.add(5).read_unaligned().to_be(); input[10] = (v5 >> 32) as u32; input[11] = v5 as u32;
+            let v6 = s_u64.add(6).read_unaligned().to_be(); input[12] = (v6 >> 32) as u32; input[13] = v6 as u32;
+            let v7 = s_u64.add(7).read_unaligned().to_be(); input[14] = (v7 >> 32) as u32; input[15] = v7 as u32;
+
+            // 2. Matrix Multiplication (16 inputs -> 18 outputs)
+            // Uses Split-Batching to prevent u64 overflow
+            let mut acc = [0u64; 18];
+
+            // Batch 1: Inputs 0-7
+            for i in 0..8 {
+                let val = input[i] as u64;
+                for k in 0..17 {
+                    acc[k + 1] += val * (TABLE_64[i][k] as u64);
+                }
+            }
+            // Intermediate Reduction
+            let mut carry = 0u64;
+            for k in (1..18).rev() {
+                let val = acc[k] + carry;
+                acc[k] = val % RADIX_58_5;
+                carry = val / RADIX_58_5;
+            }
+            acc[0] += carry;
+            carry = 0; // Reset carry, acc[0] holds MSB
+
+            // Batch 2: Inputs 8-15
+            for i in 8..16 {
+                let val = input[i] as u64;
+                for k in 0..17 {
+                    acc[k + 1] += val * (TABLE_64[i][k] as u64);
+                }
+            }
+            // Final Reduction
+            for k in (1..18).rev() {
+                let val = acc[k] + carry;
+                acc[k] = val % RADIX_58_5;
+                carry = val / RADIX_58_5;
+            }
+            acc[0] += carry;
+
+            // 3. Store into Little Endian digits_5
+            // acc[0] is MSB, digits_5[17] is MSB.
+            for k in 0..18 {
+                digits_5[17 - k] = acc[k] as u32;
+            }
+
+            count_5 = 18;
+            if digits_5[17] == 0 { count_5 = 17; }
+
+            src = src.add(64);
+            len -= 64;
+
+        } else if len >= 32 {
+            // --- 32-Byte Fast Path ---
+            let mut input = [0u32; 8];
+            let src_u32 = src as *const u32;
+            input[0] = src_u32.read_unaligned().to_be();
+            input[1] = src_u32.add(1).read_unaligned().to_be();
+            input[2] = src_u32.add(2).read_unaligned().to_be();
+            input[3] = src_u32.add(3).read_unaligned().to_be();
+            input[4] = src_u32.add(4).read_unaligned().to_be();
+            input[5] = src_u32.add(5).read_unaligned().to_be();
+            input[6] = src_u32.add(6).read_unaligned().to_be();
+            input[7] = src_u32.add(7).read_unaligned().to_be();
+
+            // Matrix Mul (8 inputs -> 9 outputs)
+            // No split batch needed for 32 bytes
+            let mut acc = [0u64; 9];
+            for i in 0..8 {
+                let val = input[i] as u64;
+                for k in 0..8 {
+                    acc[k + 1] += val * (TABLE_32[i][k] as u64);
+                }
+            }
+
+            // Reduction
+            let mut carry = 0u64;
+            for k in (1..9).rev() {
+                let val = acc[k] + carry;
+                digits_5[8 - k] = (val % RADIX_58_5) as u32;
+                carry = val / RADIX_58_5;
+            }
+            let val = acc[0] + carry;
+            digits_5[8] = (val % RADIX_58_5) as u32;
+
+            count_5 = 9;
+            if digits_5[8] == 0 { count_5 = 8; }
+
+            src = src.add(32);
+            len -= 32;
+        }
+
+        // ---------------------------------------------------------
+        // Standard Loop: Process remaining chunks
+        // ---------------------------------------------------------
+        while len >= 4 {
+            let chunk = (src as *const u32).read_unaligned().to_be();
+            let mut carry = chunk as u64;
+            
+            let mut i = 0;
+            while i < count_5 {
+                let val = (*digits_5.get_unchecked(i) as u64) * (1u64 << 32) + carry;
+                *digits_5.get_unchecked_mut(i) = (val % RADIX_58_5) as u32;
+                carry = val / RADIX_58_5;
                 i += 1;
             }
             while carry > 0 {
-                *out_digits.get_unchecked_mut(count) = (carry % RADIX_128) as u64;
-                carry /= RADIX_128;
-                count += 1;
+                *digits_5.get_unchecked_mut(count_5) = (carry % RADIX_58_5) as u32;
+                carry /= RADIX_58_5;
+                count_5 += 1;
             }
-            src = src.add(8);
-            len -= 8;
+            src = src.add(4);
+            len -= 4;
         }
 
-        // Process remaining 1-7 bytes
         if len > 0 {
             let mut chunk = 0u64;
             let mut shift = 0;
@@ -554,22 +665,42 @@ unsafe fn process_general(mut src: *const u8, mut len: usize, out_digits: &mut [
                 src = src.add(1);
                 shift += 8;
             }
-            let mut carry = chunk as u128;
+            
+            let mut carry = chunk;
             let mut i = 0;
-            while i < count {
-                let val = (*out_digits.get_unchecked(i) as u128) * (1u128 << shift) + carry;
-                *out_digits.get_unchecked_mut(i) = (val % RADIX_128) as u64;
-                carry = val / RADIX_128;
+            while i < count_5 {
+                let val = (*digits_5.get_unchecked(i) as u64) * (1u64 << shift) + carry;
+                *digits_5.get_unchecked_mut(i) = (val % RADIX_58_5) as u32;
+                carry = val / RADIX_58_5;
                 i += 1;
             }
             while carry > 0 {
-                *out_digits.get_unchecked_mut(count) = (carry % RADIX_128) as u64;
-                carry /= RADIX_128;
-                count += 1;
+                *digits_5.get_unchecked_mut(count_5) = (carry % RADIX_58_5) as u32;
+                carry /= RADIX_58_5;
+                count_5 += 1;
             }
         }
     }
-    count
+
+    // ---------------------------------------------------------
+    // Final Packing: Base 58^5 (u32) -> Base 58^10 (u64)
+    // ---------------------------------------------------------
+    let mut out_count = 0;
+    let mut i = 0;
+    while i < count_5 {
+        let low = unsafe { *digits_5.get_unchecked(i) } as u64;
+        let high = if i + 1 < count_5 {
+            *unsafe { digits_5.get_unchecked(i + 1) } as u64
+        } else {
+            0
+        };
+        
+        unsafe { *out_digits.get_unchecked_mut(out_count) = high * RADIX_58_5 + low };
+        out_count += 1;
+        i += 2;
+    }
+
+    out_count
 }
 
 // -----------------------------------------------------------------------------

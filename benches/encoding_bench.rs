@@ -46,7 +46,7 @@ fn bench_comparison(c: &mut Criterion) {
     group.noise_threshold(0.05);
     group.sample_size(50);
 
-    let sizes = [16, 24, 25, 32, 64, 69, 128, 256];
+    let sizes = [32, 48, 64, 69, 128, 256];
 
     for size in sizes.iter() {
         let input_data = generate_random_data(*size);
@@ -73,35 +73,35 @@ fn bench_comparison(c: &mut Criterion) {
             });
         }
 
-        // 2. bs58 Standard
-        if should_run("bs58")  {
-            group.bench_with_input(BenchmarkId::new("Encode/bs58", size), &input_data, |b, d| {
-                b.iter(|| encode_std(black_box(d)).with_alphabet(black_box(AlphabetStd::BITCOIN)).into_string())
-            });
-        }
+        // // 2. bs58 Standard
+        // if should_run("bs58")  {
+        //     group.bench_with_input(BenchmarkId::new("Encode/bs58", size), &input_data, |b, d| {
+        //         b.iter(|| encode_std(black_box(d)).with_alphabet(black_box(AlphabetStd::BITCOIN)).into_string())
+        //     });
+        // }
 
-        // 3. b58 Standard
-        if should_run("b58")  {
-            group.bench_with_input(BenchmarkId::new("Encode/b58", size), &input_data, |b, d| {
-                b.iter(|| encode_b58(black_box(d)))
-            });
-        }
+        // // 3. b58 Standard
+        // if should_run("b58")  {
+        //     group.bench_with_input(BenchmarkId::new("Encode/b58", size), &input_data, |b, d| {
+        //         b.iter(|| encode_b58(black_box(d)))
+        //     });
+        // }
 
-        // 4. Base58 Classic
-        if should_run("base58") {
-            group.bench_with_input(BenchmarkId::new("Encode/base58", size), &input_data, |b, d| {
-                b.iter(|| black_box(d).to_base58())
-            });
-        }
+        // // 4. Base58 Classic
+        // if should_run("base58") {
+        //     group.bench_with_input(BenchmarkId::new("Encode/base58", size), &input_data, |b, d| {
+        //         b.iter(|| black_box(d).to_base58())
+        //     });
+        // }
 
-        // 5. vbs58 "SIMD"
-        if should_run("vbs58") {
-            group.bench_with_input(BenchmarkId::new("Encode/vbs58", size), &input_data, |b, d| {
-                b.iter(|| encode_simd(black_box(d)))
-            });
-        }
+        // // 5. vbs58 "SIMD"
+        // if should_run("vbs58") {
+        //     group.bench_with_input(BenchmarkId::new("Encode/vbs58", size), &input_data, |b, d| {
+        //         b.iter(|| encode_simd(black_box(d)))
+        //     });
+        // }
 
-        // 5. five8-32 "non-general code"
+        // 5a. five8-32 "non-general code"
         if should_run("five8") && *size == 32 {
             group.bench_with_input(BenchmarkId::new("Encode/five8", size), &input_data, |b, d| {
                 b.iter(|| {
@@ -114,7 +114,7 @@ fn bench_comparison(c: &mut Criterion) {
             });
         }
 
-        // 5. five8-64 "non-general code"
+        // 5b. five8-64 "non-general code"
         if should_run("five8") && *size == 64 {
             group.bench_with_input(BenchmarkId::new("Encode/five8", size), &input_data, |b, d| {
                 b.iter(|| {
