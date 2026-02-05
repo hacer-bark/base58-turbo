@@ -1,25 +1,4 @@
-use core::fmt;
-
-// ----------------------------------------------------------------------
-// Public Types
-// ----------------------------------------------------------------------
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Error {
-    /// An invalid character was encountered (not in Base58 alphabet).
-    InvalidCharacter,
-    /// The output buffer is too small to hold the decoded data.
-    BufferTooSmall,
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Error::InvalidCharacter => write!(f, "invalid character in base58 string"),
-            Error::BufferTooSmall => write!(f, "output buffer too small"),
-        }
-    }
-}
+use crate::{Error, Config};
 
 // ----------------------------------------------------------------------
 // Constants & Lookups
@@ -28,19 +7,6 @@ impl fmt::Display for Error {
 /// Base 58^10 (~4.3 * 10^17).
 /// This fits in a u64, allowing us to process 10 characters per bignum iteration.
 const RADIX_58_10: u64 = 430_804_206_899_405_824;
-
-/// Maps ASCII characters to Base58 values (0..57). 
-/// Invalid characters are mapped to 255.
-const DECODE_MAP: [u8; 256] = {
-    let mut map = [255u8; 256];
-    let alphabet = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-    let mut i = 0;
-    while i < 58 {
-        map[alphabet[i] as usize] = i as u8;
-        i += 1;
-    }
-    map
-};
 
 // ----------------------------------------------------------------------
 // Arithmetic Helpers
@@ -75,12 +41,12 @@ unsafe fn bignum_mul_add(digits: &mut [u64], count: &mut usize, multiplier: u64,
 /// Parses a chunk of Base58 characters into a u64 value.
 /// Also calculates the effective multiplier (58^len) for that chunk.
 #[inline(always)]
-unsafe fn parse_chunk(src: &[u8]) -> Result<(u64, u64), Error> {
+unsafe fn parse_chunk(config: &Config, src: &[u8]) -> Result<(u64, u64), Error> {
     let mut value = 0u64;
     let mut multiplier = 1u64;
 
     for &byte in src {
-        let digit = *unsafe { DECODE_MAP.get_unchecked(byte as usize) };
+        let digit = *unsafe { config.decode_map.get_unchecked(byte as usize) };
         if digit == 255 { return Err(Error::InvalidCharacter); }
 
         value = value * 58 + (digit as u64);
@@ -97,7 +63,7 @@ unsafe fn parse_chunk(src: &[u8]) -> Result<(u64, u64), Error> {
 /// Decodes the payload into the destination buffer.
 /// Returns the number of bytes written.
 #[inline(always)]
-unsafe fn decode_payload(mut src: &[u8], dst: &mut [u8]) -> Result<usize, Error> {
+unsafe fn decode_payload(config: &Config, mut src: &[u8], dst: &mut [u8]) -> Result<usize, Error> {
     // 1. Accumulation Phase
     // Use a stack-allocated buffer for the bignum (Little Endian u64s).
     // 128 u64s = 1024 bytes, sufficient for very large inputs.
@@ -110,7 +76,7 @@ unsafe fn decode_payload(mut src: &[u8], dst: &mut [u8]) -> Result<usize, Error>
         // Unroll parsing for the fixed chunk size
         let mut chunk = 0u64;
         for i in 0..10 {
-            let digit = *unsafe { DECODE_MAP.get_unchecked(*src.get_unchecked(i) as usize) };
+            let digit = *unsafe { config.decode_map.get_unchecked(*src.get_unchecked(i) as usize) };
             if digit == 255 { return Err(Error::InvalidCharacter); }
             chunk = chunk * 58 + (digit as u64);
         }
@@ -121,7 +87,7 @@ unsafe fn decode_payload(mut src: &[u8], dst: &mut [u8]) -> Result<usize, Error>
 
     // Process remaining tail (1-9 characters)
     if !src.is_empty() {
-        let (chunk, multiplier) = unsafe { parse_chunk(src) }?;
+        let (chunk, multiplier) = unsafe { parse_chunk(config, src) }?;
         unsafe { bignum_mul_add(&mut bignum, &mut count, multiplier, chunk) };
     }
 
@@ -139,7 +105,7 @@ unsafe fn decode_payload(mut src: &[u8], dst: &mut [u8]) -> Result<usize, Error>
             if out_idx == 0 {
                 // If we run out of space but still have data, fail.
                 // We check `val > 0` or if there are remaining words `i+1 < count`.
-                if val > 0 || i + 1 < count { return Err(Error::BufferTooSmall); }
+                if val > 0 || i + 1 < count { return Err(Error::BufferTooSmall); } // Errors here.
                 break;
             }
             out_idx -= 1;
@@ -175,9 +141,9 @@ unsafe fn decode_payload(mut src: &[u8], dst: &mut [u8]) -> Result<usize, Error>
 // ----------------------------------------------------------------------
 
 #[inline(always)]
-pub unsafe fn decode_slice_unsafe(input: &[u8], dst: &mut [u8]) -> Result<usize, Error> {
+pub unsafe fn decode_slice_unsafe(input: &[u8], dst: &mut [u8], config: &Config) -> Result<usize, Error> {
     // Hard limit of 512 bytes.
-    assert!(input.len() < 512);
+    assert!(input.len() <= 512, "Input too big! {}", input.len());
 
     // 1. Handle Leading '1's
     // In Base58, '1' represents a zero byte. We count them and write zeros immediately.
@@ -201,7 +167,7 @@ pub unsafe fn decode_slice_unsafe(input: &[u8], dst: &mut [u8]) -> Result<usize,
         return Ok(leading_zeros); 
     }
 
-    let written_payload = unsafe { decode_payload(src, &mut dst[leading_zeros..]) }?;
+    let written_payload = unsafe { decode_payload(config, src, &mut dst[leading_zeros..]) }?;
 
     Ok(leading_zeros + written_payload)
 }

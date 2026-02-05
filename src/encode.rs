@@ -1,29 +1,14 @@
+use crate::Config;
+
 // ----------------------------------------------------------------------
 // Constants & Lookup Tables
 // ----------------------------------------------------------------------
-
-const ALPHABET: [u8; 58] = *b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 
 /// Base 58^4 (11,316,496)
 const RADIX_58_4: u64 = 11_316_496;
 
 /// Base 58^5 (656,356,768)
 const RADIX_58_5: u64 = 656_356_768;
-
-/// Lookup table for fast 2-char emission.
-/// Maps 0..3363 to two Base58 characters (packed as u16).
-const LUT_58_SQUARED: [u16; 3364] = {
-    let mut table = [0u16; 3364];
-    let mut i = 0;
-    while i < 3364 {
-        let c1 = ALPHABET[i / 58];
-        let c2 = ALPHABET[i % 58];
-        // Store as Big Endian u16 for direct memory write
-        table[i] = ((c1 as u16) << 8) | (c2 as u16);
-        i += 1;
-    }
-    table
-};
 
 // ----------------------------------------------------------------------
 // Table Generation
@@ -112,7 +97,7 @@ unsafe fn load_be_u64(ptr: *const u8) -> u64 {
 
 /// Emits exactly 10 characters for a full `u64` digit (Base 58^10).
 #[inline(always)]
-unsafe fn emit_full_block(mut val: u64, out_ptr: &mut *mut u8) {
+unsafe fn emit_full_block(config: &Config, mut val: u64, out_ptr: &mut *mut u8) {
     // Extract Low 4 chars
     let rem1 = (val % RADIX_58_4) as usize;
     val /= RADIX_58_4;
@@ -127,23 +112,23 @@ unsafe fn emit_full_block(mut val: u64, out_ptr: &mut *mut u8) {
     unsafe {
         // Write backwards using 2-byte lookup table
         *out_ptr = out_ptr.sub(2);
-        (*out_ptr as *mut u16).write_unaligned(LUT_58_SQUARED.get_unchecked(rem1 % 3364).to_be());
+        (*out_ptr as *mut u16).write_unaligned(config.lut_58_squared.get_unchecked(rem1 % 3364).to_be());
         *out_ptr = out_ptr.sub(2);
-        (*out_ptr as *mut u16).write_unaligned(LUT_58_SQUARED.get_unchecked(rem1 / 3364).to_be());
+        (*out_ptr as *mut u16).write_unaligned(config.lut_58_squared.get_unchecked(rem1 / 3364).to_be());
 
         *out_ptr = out_ptr.sub(2);
-        (*out_ptr as *mut u16).write_unaligned(LUT_58_SQUARED.get_unchecked(rem2 % 3364).to_be());
+        (*out_ptr as *mut u16).write_unaligned(config.lut_58_squared.get_unchecked(rem2 % 3364).to_be());
         *out_ptr = out_ptr.sub(2);
-        (*out_ptr as *mut u16).write_unaligned(LUT_58_SQUARED.get_unchecked(rem2 / 3364).to_be());
+        (*out_ptr as *mut u16).write_unaligned(config.lut_58_squared.get_unchecked(rem2 / 3364).to_be());
 
         *out_ptr = out_ptr.sub(2);
-        (*out_ptr as *mut u16).write_unaligned(LUT_58_SQUARED.get_unchecked(rem3).to_be());
+        (*out_ptr as *mut u16).write_unaligned(config.lut_58_squared.get_unchecked(rem3).to_be());
     }
 }
 
 /// Emits 1 to 10 characters for the most significant digit.
 #[inline(always)]
-unsafe fn emit_partial_block(mut val: u64, len: usize, mut out_ptr: *mut u8) {
+unsafe fn emit_partial_block(config: &Config, mut val: u64, len: usize, mut out_ptr: *mut u8) {
     let mut loops = len;
 
     // Optimize: Write 4 chars at a time
@@ -156,9 +141,9 @@ unsafe fn emit_partial_block(mut val: u64, len: usize, mut out_ptr: *mut u8) {
 
         unsafe {
             out_ptr = out_ptr.sub(2);
-            (out_ptr as *mut u16).write_unaligned(LUT_58_SQUARED.get_unchecked(low).to_be());
+            (out_ptr as *mut u16).write_unaligned(config.lut_58_squared.get_unchecked(low).to_be());
             out_ptr = out_ptr.sub(2);
-            (out_ptr as *mut u16).write_unaligned(LUT_58_SQUARED.get_unchecked(high).to_be());
+            (out_ptr as *mut u16).write_unaligned(config.lut_58_squared.get_unchecked(high).to_be());
         }
         loops -= 4;
     }
@@ -167,7 +152,7 @@ unsafe fn emit_partial_block(mut val: u64, len: usize, mut out_ptr: *mut u8) {
     while loops > 0 {
         unsafe {
             out_ptr = out_ptr.sub(1);
-            *out_ptr = *ALPHABET.get_unchecked((val % 58) as usize);
+            *out_ptr = *config.alphabet.get_unchecked((val % 58) as usize);
         }
         val /= 58;
         loops -= 1;
@@ -176,7 +161,7 @@ unsafe fn emit_partial_block(mut val: u64, len: usize, mut out_ptr: *mut u8) {
 
 /// Orchestrates the writing of the bignum digits to the output buffer.
 #[inline(always)]
-unsafe fn write_digits_to_string(digits: &[u64], count: usize, dst_end: *mut u8) -> *mut u8 {
+unsafe fn write_digits_to_string(config: &Config, digits: &[u64], count: usize, dst_end: *mut u8) -> *mut u8 {
     // 1. Determine length of the most significant digit
     let mut last_val = *unsafe { digits.get_unchecked(count - 1) };
     let mut last_chunk_len = 0;
@@ -193,11 +178,11 @@ unsafe fn write_digits_to_string(digits: &[u64], count: usize, dst_end: *mut u8)
 
     // 3. Emit full blocks
     for i in 0..(count - 1) {
-        unsafe { emit_full_block(*digits.get_unchecked(i), &mut out_ptr) };
+        unsafe { emit_full_block(config, *digits.get_unchecked(i), &mut out_ptr) };
     }
 
     // 4. Emit MSB
-    unsafe { emit_partial_block(*digits.get_unchecked(count - 1), last_chunk_len, out_ptr) };
+    unsafe { emit_partial_block(config, *digits.get_unchecked(count - 1), last_chunk_len, out_ptr) };
 
     final_start_ptr
 }
@@ -339,11 +324,11 @@ unsafe fn process_fixed_64(src: *const u8, out_digits: &mut [u64]) -> usize {
     out_digits[1] = digits[14] * RADIX_58_5 + digits[15];
     out_digits[2] = digits[12] * RADIX_58_5 + digits[13];
     out_digits[3] = digits[10] * RADIX_58_5 + digits[11];
-    out_digits[4] = digits[8]  * RADIX_58_5 + digits[9];
-    out_digits[5] = digits[6]  * RADIX_58_5 + digits[7];
-    out_digits[6] = digits[4]  * RADIX_58_5 + digits[5];
-    out_digits[7] = digits[2]  * RADIX_58_5 + digits[3];
-    out_digits[8] = digits[0]  * RADIX_58_5 + digits[1];
+    out_digits[4] = digits[8] * RADIX_58_5 + digits[9];
+    out_digits[5] = digits[6] * RADIX_58_5 + digits[7];
+    out_digits[6] = digits[4] * RADIX_58_5 + digits[5];
+    out_digits[7] = digits[2] * RADIX_58_5 + digits[3];
+    out_digits[8] = digits[0] * RADIX_58_5 + digits[1];
 
     if out_digits[8] > 0 { 9 } else { 8 }
 }
@@ -400,11 +385,11 @@ unsafe fn process_fixed_69(src: *const u8, out_digits: &mut [u64]) -> usize {
     out_digits[2] = digits[14] * RADIX_58_5 + digits[15];
     out_digits[3] = digits[12] * RADIX_58_5 + digits[13];
     out_digits[4] = digits[10] * RADIX_58_5 + digits[11];
-    out_digits[5] = digits[8]  * RADIX_58_5 + digits[9];
-    out_digits[6] = digits[6]  * RADIX_58_5 + digits[7];
-    out_digits[7] = digits[4]  * RADIX_58_5 + digits[5];
-    out_digits[8] = digits[2]  * RADIX_58_5 + digits[3];
-    out_digits[9] = digits[0]  * RADIX_58_5 + digits[1];
+    out_digits[5] = digits[8] * RADIX_58_5 + digits[9];
+    out_digits[6] = digits[6] * RADIX_58_5 + digits[7];
+    out_digits[7] = digits[4] * RADIX_58_5 + digits[5];
+    out_digits[8] = digits[2] * RADIX_58_5 + digits[3];
+    out_digits[9] = digits[0] * RADIX_58_5 + digits[1];
 
     if out_digits[9] > 0 { 10 } else { 9 }
 }
@@ -568,7 +553,10 @@ unsafe fn process_general(mut src: *const u8, mut len: usize, out_digits: &mut [
 // ----------------------------------------------------------------------
 
 #[inline(always)]
-pub unsafe fn encode_slice_unsafe(input: &[u8], mut dst: *mut u8) -> usize {
+pub unsafe fn encode_slice_unsafe(input: &[u8], mut dst: *mut u8, config: &Config) -> usize {
+    // Hard limit of 512 bytes.
+    assert!(input.len() <= 512, "Input too big! {}", input.len());
+
     let mut len = input.len();
     let mut src = input.as_ptr();
     let dst_start = dst;
@@ -611,7 +599,7 @@ pub unsafe fn encode_slice_unsafe(input: &[u8], mut dst: *mut u8) -> usize {
     };
 
     // 3. Emit String
-    let final_ptr = unsafe { write_digits_to_string(&radix_digits, count, dst) };
+    let final_ptr = unsafe { write_digits_to_string(config, &radix_digits, count, dst) };
 
     unsafe { final_ptr.offset_from(dst_start) as usize }
 }
