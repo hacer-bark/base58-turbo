@@ -48,9 +48,9 @@ mod exhaustive_tests {
             assert_eq!(&buff[..written], encoded.as_bytes(), "Failed at size {}", i);
 
             let mut buff_dec = vec![0u8; 1024];
-            let written_dec = unsafe { decode_slice_unsafe(&buff[..written], buff_dec.as_mut_ptr()).unwrap() };
+            let written_dec = unsafe { decode_slice_unsafe(&buff[..written], &mut buff_dec).unwrap() };
 
-            assert_eq!(data, &buff[..written_dec], "Failed at size {}", i);
+            assert_eq!(data, &buff_dec[..written_dec], "Failed at size {}", i);
         }
     }
 }
