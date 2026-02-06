@@ -25,7 +25,7 @@ fn generate_random_data(size: usize) -> Vec<u8> {
 /// Helper to check if a specific engine should be benchmarked based on ENV vars.
 /// Usage: `BENCH_TARGET=turbo cargo bench` or `BENCH_TARGET=all cargo bench`
 fn should_run(target_name: &str) -> bool {
-    let var = env::var("BENCH_TARGET").unwrap_or_else(|_| "all".to_string());
+    let var = env::var("BENCH_TARGET").unwrap_or_else(|_| "turbo".to_string());
     if var == "all" {
         return true;
     }

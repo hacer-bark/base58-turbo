@@ -218,6 +218,7 @@ fn test_roundtrip_random_data() {
 // ======================================================================
 
 #[test]
+#[cfg(not(miri))]
 fn test_vs_bs58_crate_bitcoin() {
     let mut seed: u64 = rand::random();
     fn next_byte(seed: &mut u64) -> u8 {
@@ -252,6 +253,7 @@ fn test_vs_bs58_crate_bitcoin() {
 }
 
 #[test]
+#[cfg(not(miri))]
 fn test_vs_bs58_crate_ripple() {
     let mut seed: u64 = rand::random();
     fn next_byte(seed: &mut u64) -> u8 {

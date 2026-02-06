@@ -122,7 +122,8 @@ unsafe fn decode_payload(config: &Config, mut src: &[u8], dst: &mut [u8]) -> Res
 
     // Move the valid payload to the start of the buffer (memmove)
     if out_idx > 0 {
-        unsafe { core::ptr::copy(dst.as_ptr().add(out_idx), dst.as_mut_ptr(), length) };
+        let ptr = dst.as_mut_ptr();
+        unsafe { core::ptr::copy(ptr.add(out_idx), ptr, length) };
     } else if length > dst.len() {
         return Err(Error::BufferTooSmall);
     }

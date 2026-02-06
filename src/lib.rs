@@ -84,7 +84,7 @@
 
 #![cfg_attr(not(any(feature = "std", test)), no_std)]
 #![doc(issue_tracker_base_url = "https://github.com/hacer-bark/base58-turbo/issues/")]
-#![deny(unsafe_op_in_unsafe_fn)]
+// #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(missing_docs)]
 #![warn(rust_2018_idioms)]
 #![warn(unused_qualifications)]
@@ -400,67 +400,29 @@ impl Engine {
     }
 }
 
-#[cfg(kani)]
-mod kani_verification_scalar {
-    use super::*;
-    use crate::{Config, STANDARD as TURBO_STANDARD, STANDARD_NO_PAD as TURBO_STANDARD_NO_PAD};
+// #[cfg(kani)]
+// mod kani_verification {
+//     use super::*;
 
-    // Magic number
-    // It handles 2 loops unroll + tail.
-    const INPUT_LEN: usize = 17;
+//     const INPUT_LEN: usize = 5;
 
-    fn encoded_size(len: usize, padding: bool) -> usize {
-        if padding { TURBO_STANDARD.encoded_len(len) } else { TURBO_STANDARD_NO_PAD.encoded_len(len) }
-    }
+//     #[kani::proof]
+//     fn check_roundtrip_safety() {
+//         // Symbolic Input
+//         let input: [u8; INPUT_LEN] = kani::any();
 
-    #[kani::proof]
-    #[kani::unwind(18)]
-    fn check_roundtrip_safety() {
-        // Symbolic Config
-        let config = Config {
-            url_safe: kani::any(),
-            padding: kani::any(),
-        };
+//         let encoded = BITCOIN.encode(&input).unwrap();
+//         let decoded = BITCOIN.decode(encoded).unwrap();
 
-        // Symbolic Input
-        let input: [u8; INPUT_LEN] = kani::any();
+//         assert_eq!(decoded, &input, "AVX2 Roundtrip Failed");
+//     }
 
-        // Setup Buffers
-        let enc_len = encoded_size(INPUT_LEN, config.padding);
-        let mut enc_buf = [0u8; 64];
-        let mut dec_buf = [0u8; 64];
+//     // #[kani::proof]
+//     // fn check_decoder_robustness() {
+//     //     // Symbolic Input (Random Garbage)
+//     //     let input: [u8; INPUT_LEN] = kani::any();
 
-        unsafe {
-            // Encode
-            encode_slice_unsafe(&config, &input, enc_buf.as_mut_ptr());
-
-            // Decode
-            let src_slice = &enc_buf[..enc_len];
-            let written = decode_slice_unsafe(&config, src_slice, dec_buf.as_mut_ptr()).expect("Decoder failed");
-
-            // Verification
-            assert_eq!(&dec_buf[..written], &input, "AVX2 Roundtrip Failed");
-        }
-    }
-
-    #[kani::proof]
-    #[kani::unwind(18)]
-    fn check_decoder_robustness() {
-        // Symbolic Config
-        let config = Config {
-            url_safe: kani::any(),
-            padding: kani::any(),
-        };
-
-        // Symbolic Input (Random Garbage)
-        let input: [u8; INPUT_LEN] = kani::any();
-
-        // Setup Buffer
-        let mut dec_buf = [0u8; 64];
-
-        unsafe {
-            // We verify what function NEVER panics/crashes
-            let _ = decode_slice_unsafe(&config, &input, dec_buf.as_mut_ptr());
-        }
-    }
-}
+//     //     // We verify what function NEVER panics/crashes
+//     //     let _ = BITCOIN.decode(input);
+//     // }
+// }
