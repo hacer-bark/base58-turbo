@@ -93,8 +93,7 @@ unsafe fn decode_payload(config: &Config, mut src: &[u8], dst: &mut [u8]) -> Res
 
     // 2. Emission Phase
     // Convert Little Endian u64 words to a Big Endian byte stream.
-    // We write backwards from the end of the destination buffer to handle size checks naturally.
-
+    // We write backwards from the end of the destination buffer.
     let mut out_idx = dst.len();
 
     for i in 0..count {
@@ -104,8 +103,7 @@ unsafe fn decode_payload(config: &Config, mut src: &[u8], dst: &mut [u8]) -> Res
         for _ in 0..8 {
             if out_idx == 0 {
                 // If we run out of space but still have data, fail.
-                // We check `val > 0` or if there are remaining words `i+1 < count`.
-                if val > 0 || i + 1 < count { return Err(Error::BufferTooSmall); } // Errors here.
+                if val > 0 || i + 1 < count { return Err(Error::BufferTooSmall); }
                 break;
             }
             out_idx -= 1;
@@ -115,10 +113,7 @@ unsafe fn decode_payload(config: &Config, mut src: &[u8], dst: &mut [u8]) -> Res
     }
 
     // 3. Normalization Phase
-    // The previous step might have left leading zeros in the buffer (e.g. if dst.len() > needed).
-    // It might also be misaligned if the payload is small.
-
-    // Skip leading zeros *written by the loop* (not the original leading 1s)
+    // Skip leading zeros *written by the loop* (not the explicit leading zeros from step 1)
     while out_idx < dst.len() && *unsafe { dst.get_unchecked(out_idx) } == 0 {
         out_idx += 1;
     }
@@ -129,7 +124,6 @@ unsafe fn decode_payload(config: &Config, mut src: &[u8], dst: &mut [u8]) -> Res
     if out_idx > 0 {
         unsafe { core::ptr::copy(dst.as_ptr().add(out_idx), dst.as_mut_ptr(), length) };
     } else if length > dst.len() {
-        // Safety catch, though out_idx check above usually catches this
         return Err(Error::BufferTooSmall);
     }
 
@@ -145,10 +139,11 @@ pub unsafe fn decode_slice_unsafe(input: &[u8], dst: &mut [u8], config: &Config)
     // Hard limit of 512 bytes.
     assert!(input.len() <= 512, "Input too big! {}", input.len());
 
-    // 1. Handle Leading '1's
-    // In Base58, '1' represents a zero byte. We count them and write zeros immediately.
+    // 1. Handle Leading Zeros
+    let zero_char = *unsafe { config.alphabet.get_unchecked(0) };
+
     let mut leading_zeros = 0;
-    while leading_zeros < input.len() && *unsafe { input.get_unchecked(leading_zeros) } == b'1' {
+    while leading_zeros < input.len() && *unsafe { input.get_unchecked(leading_zeros) } == zero_char {
         leading_zeros += 1;
     }
 

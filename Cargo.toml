@@ -2,21 +2,18 @@
 name = "base58-turbo"
 version = "0.1.0"
 edition = "2024"
-license = "MIT"
+license = "MIT OR Apache-2.0"
 readme = "README.md"
 authors = ["Hacer"]
 
 [features]
-default = ["std", "simd"]
+default = ["std"]
 std = []
-simd = ["std"]
 
 [dev-dependencies]
 rand = "0.9"
 criterion = { version = "0.7", features = ["html_reports"] }
-b58 = "0.1"
 bs58 = "0.5"
-bsv58 = "0.1"
 base58 = "0.2"
 five8 = "1"
 base58-turbo = { path = "." }

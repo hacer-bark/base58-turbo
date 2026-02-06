@@ -71,11 +71,11 @@ const TABLE_25: [[u32; 7]; 7] = generate_weights::<7, 7>();
 // 32 bytes -> 8 input chunks (8x u32) -> 8 output digits
 const TABLE_32: [[u32; 8]; 8] = generate_weights::<8, 8>();
 
-// 64 bytes -> 16 input chunks -> 17 output digits
-const TABLE_64: [[u32; 17]; 16] = generate_weights::<16, 17>();
+// 64 bytes -> 16 input chunks -> 18 output digits
+const TABLE_64: [[u32; 18]; 16] = generate_weights::<16, 18>();
 
-// 69 bytes -> 18 input chunks -> 19 output digits
-const TABLE_69: [[u32; 19]; 18] = generate_weights::<18, 19>();
+// 69 bytes -> 18 input chunks -> 20 output digits
+const TABLE_69: [[u32; 20]; 18] = generate_weights::<18, 20>();
 
 // ----------------------------------------------------------------------
 // Memory Helpers
@@ -283,19 +283,20 @@ unsafe fn process_fixed_64(src: *const u8, out_digits: &mut [u64]) -> usize {
     }
 
     // 2. Accumulate (Split-Batching to avoid u64 overflow)
-    let mut digits = [0u64; 18];
+    // Needs 18 digits + 1 carry/overflow slot = 19
+    let mut digits = [0u64; 19];
 
     // Batch 1: Inputs 0-7
     for i in 0..8 {
         let val = input[i] as u64;
-        for k in 0..17 {
+        for k in 0..18 {
             digits[k + 1] += val * (TABLE_64[i][k] as u64);
         }
     }
 
     // Reduce Batch 1
     let mut carry = 0u64;
-    for k in (1..18).rev() {
+    for k in (1..19).rev() {
         let val = digits[k] + carry;
         digits[k] = val % RADIX_58_5;
         carry = val / RADIX_58_5;
@@ -306,13 +307,13 @@ unsafe fn process_fixed_64(src: *const u8, out_digits: &mut [u64]) -> usize {
     // Batch 2: Inputs 8-15
     for i in 8..16 {
         let val = input[i] as u64;
-        for k in 0..17 {
+        for k in 0..18 {
             digits[k + 1] += val * (TABLE_64[i][k] as u64);
         }
     }
 
     // Final Reduction
-    for k in (1..18).rev() {
+    for k in (1..19).rev() {
         let val = digits[k] + carry;
         digits[k] = val % RADIX_58_5;
         carry = val / RADIX_58_5;
@@ -320,17 +321,18 @@ unsafe fn process_fixed_64(src: *const u8, out_digits: &mut [u64]) -> usize {
     digits[0] += carry;
 
     // 3. Pack into Base 58^10
-    out_digits[0] = digits[16] * RADIX_58_5 + digits[17];
-    out_digits[1] = digits[14] * RADIX_58_5 + digits[15];
-    out_digits[2] = digits[12] * RADIX_58_5 + digits[13];
-    out_digits[3] = digits[10] * RADIX_58_5 + digits[11];
-    out_digits[4] = digits[8] * RADIX_58_5 + digits[9];
-    out_digits[5] = digits[6] * RADIX_58_5 + digits[7];
-    out_digits[6] = digits[4] * RADIX_58_5 + digits[5];
-    out_digits[7] = digits[2] * RADIX_58_5 + digits[3];
-    out_digits[8] = digits[0] * RADIX_58_5 + digits[1];
+    out_digits[0] = digits[17] * RADIX_58_5 + digits[18];
+    out_digits[1] = digits[15] * RADIX_58_5 + digits[16];
+    out_digits[2] = digits[13] * RADIX_58_5 + digits[14];
+    out_digits[3] = digits[11] * RADIX_58_5 + digits[12];
+    out_digits[4] = digits[9] * RADIX_58_5 + digits[10];
+    out_digits[5] = digits[7] * RADIX_58_5 + digits[8];
+    out_digits[6] = digits[5] * RADIX_58_5 + digits[6];
+    out_digits[7] = digits[3] * RADIX_58_5 + digits[4];
+    out_digits[8] = digits[1] * RADIX_58_5 + digits[2];
+    out_digits[9] = digits[0];
 
-    if out_digits[8] > 0 { 9 } else { 8 }
+    if out_digits[9] > 0 { 10 } else { 9 }
 }
 
 /// Optimized kernel for 69 bytes.
@@ -342,7 +344,7 @@ unsafe fn process_fixed_69(src: *const u8, out_digits: &mut [u64]) -> usize {
     unsafe {
         input[0] = *src as u32;
 
-        // Efficient body reading using 64-bit loads to extract u32 pairs
+        // Efficient body reading using 64-bit loads
         let body_ptr = src.add(1);
         for i in 0..8 {
             let v = load_be_u64(body_ptr.add(i * 8));
@@ -353,20 +355,20 @@ unsafe fn process_fixed_69(src: *const u8, out_digits: &mut [u64]) -> usize {
     }
 
     // 2. Accumulate (3 Batches)
-    let mut digits = [0u64; 20];
+    // Needs 20 digits + 1 carry slot = 21
+    let mut digits = [0u64; 21];
     let mut carry = 0u64;
 
     // Helper closure to process a batch of 6 inputs
-    // (Inlined for performance, effectively)
     let mut process_batch = |start_idx: usize| {
         for i in start_idx..(start_idx + 6) {
             let val = input[i] as u64;
-            for k in 0..19 {
+            for k in 0..20 {
                 digits[k + 1] += val * (TABLE_69[i][k] as u64);
             }
         }
         // Reduction
-        for k in (1..20).rev() {
+        for k in (1..21).rev() {
             let val = digits[k] + carry;
             digits[k] = val % RADIX_58_5;
             carry = val / RADIX_58_5;
@@ -380,18 +382,19 @@ unsafe fn process_fixed_69(src: *const u8, out_digits: &mut [u64]) -> usize {
     process_batch(12);
 
     // 3. Pack
-    out_digits[0] = digits[18] * RADIX_58_5 + digits[19];
-    out_digits[1] = digits[16] * RADIX_58_5 + digits[17];
-    out_digits[2] = digits[14] * RADIX_58_5 + digits[15];
-    out_digits[3] = digits[12] * RADIX_58_5 + digits[13];
-    out_digits[4] = digits[10] * RADIX_58_5 + digits[11];
-    out_digits[5] = digits[8] * RADIX_58_5 + digits[9];
-    out_digits[6] = digits[6] * RADIX_58_5 + digits[7];
-    out_digits[7] = digits[4] * RADIX_58_5 + digits[5];
-    out_digits[8] = digits[2] * RADIX_58_5 + digits[3];
-    out_digits[9] = digits[0] * RADIX_58_5 + digits[1];
+    out_digits[0] = digits[19] * RADIX_58_5 + digits[20];
+    out_digits[1] = digits[17] * RADIX_58_5 + digits[18];
+    out_digits[2] = digits[15] * RADIX_58_5 + digits[16];
+    out_digits[3] = digits[13] * RADIX_58_5 + digits[14];
+    out_digits[4] = digits[11] * RADIX_58_5 + digits[12];
+    out_digits[5] = digits[9] * RADIX_58_5 + digits[10];
+    out_digits[6] = digits[7] * RADIX_58_5 + digits[8];
+    out_digits[7] = digits[5] * RADIX_58_5 + digits[6];
+    out_digits[8] = digits[3] * RADIX_58_5 + digits[4];
+    out_digits[9] = digits[1] * RADIX_58_5 + digits[2];
+    out_digits[10] = digits[0];
 
-    if out_digits[9] > 0 { 10 } else { 9 }
+    if out_digits[10] > 0 { 11 } else { 10 }
 }
 
 // ----------------------------------------------------------------------
@@ -408,30 +411,29 @@ unsafe fn process_general(mut src: *const u8, mut len: usize, out_digits: &mut [
     // ----------------------------------------------------------------------
     // 1. Smart Jump-Start
     // ----------------------------------------------------------------------
-    // Initialize the bignum with a large block if possible.
     
     if len >= 64 {
         // --- 64-Byte Initialization ---
         let mut input = [0u32; 16];
         let s_u64 = src as *const u64;
         
-        // Unrolled 64-bit loads
         for i in 0..8 {
             let v = unsafe { (s_u64.add(i)).read_unaligned().to_be() };
             input[i * 2] = (v >> 32) as u32;
             input[i * 2 + 1] = v as u32;
         }
 
-        // Batch Matrix Mul (16 inputs -> 18 outputs)
-        let mut acc = [0u64; 18];
+        // Batch Matrix Mul (16 inputs -> 18 outputs (TABLE_64))
+        // Needs 19 slots for accumulation
+        let mut acc = [0u64; 19];
         let mut carry = 0u64;
 
         // Batch 1
         for i in 0..8 {
             let val = input[i] as u64;
-            for k in 0..17 { acc[k + 1] += val * (TABLE_64[i][k] as u64); }
+            for k in 0..18 { acc[k + 1] += val * (TABLE_64[i][k] as u64); }
         }
-        for k in (1..18).rev() {
+        for k in (1..19).rev() {
             let val = acc[k] + carry; acc[k] = val % RADIX_58_5; carry = val / RADIX_58_5;
         }
         acc[0] += carry; carry = 0;
@@ -439,22 +441,22 @@ unsafe fn process_general(mut src: *const u8, mut len: usize, out_digits: &mut [
         // Batch 2
         for i in 8..16 {
             let val = input[i] as u64;
-            for k in 0..17 { acc[k + 1] += val * (TABLE_64[i][k] as u64); }
+            for k in 0..18 { acc[k + 1] += val * (TABLE_64[i][k] as u64); }
         }
-        for k in (1..18).rev() {
+        for k in (1..19).rev() {
             let val = acc[k] + carry; acc[k] = val % RADIX_58_5; carry = val / RADIX_58_5;
         }
         acc[0] += carry;
 
         // Store to state (Little Endian)
-        for k in 0..18 { digits_5[17 - k] = acc[k] as u32; }
-        count_5 = if digits_5[17] == 0 { 17 } else { 18 };
+        for k in 0..19 { digits_5[18 - k] = acc[k] as u32; }
+        count_5 = if digits_5[18] == 0 { 18 } else { 19 };
 
         src = unsafe { src.add(64) };
         len -= 64;
 
     } else if len >= 32 {
-        // --- 32-Byte Initialization ---
+        // --- 32-Byte Initialization (unchanged) ---
         let mut input = [0u32; 8];
         for i in 0..8 { input[i] = unsafe { load_be_u32(src.add(i*4)) }; }
 
@@ -561,12 +563,18 @@ pub unsafe fn encode_slice_unsafe(input: &[u8], mut dst: *mut u8, config: &Confi
     let mut src = input.as_ptr();
     let dst_start = dst;
 
+    // Fetch the specific zero character for this alphabet (e.g. '1' for Bitcoin, 'r' for Ripple)
+    let z_char = *unsafe { config.alphabet.get_unchecked(0) };
+    
+    // Create a 8-byte pattern of the zero char for vectorized writing
+    // e.g. if z_char is '1' (0x31), pattern is 0x3131313131313131
+    let z_pattern = 0x0101010101010101 * (z_char as u64);
+
     unsafe {
-        // 1. Skip and Write Leading Zeros (as '1')
-        // Vectorized check for 8 zeros at a time
+        // 1. Skip and Write Leading Zeros
         while len >= 8 {
             if (src as *const u64).read_unaligned() == 0 {
-                (dst as *mut u64).write_unaligned(0x3131313131313131); // 8x '1'
+                (dst as *mut u64).write_unaligned(z_pattern);
                 dst = dst.add(8);
                 src = src.add(8);
                 len -= 8;
@@ -574,9 +582,8 @@ pub unsafe fn encode_slice_unsafe(input: &[u8], mut dst: *mut u8, config: &Confi
                 break;
             }
         }
-        // Scalar check for remaining zeros
         while len > 0 && *src == 0 {
-            *dst = b'1';
+            *dst = z_char;
             dst = dst.add(1);
             src = src.add(1);
             len -= 1;
@@ -588,7 +595,6 @@ pub unsafe fn encode_slice_unsafe(input: &[u8], mut dst: *mut u8, config: &Confi
     }
 
     // 2. Dispatch to Kernel
-    // Unified buffer size (128 u64s = 1024 bytes output capacity)
     let mut radix_digits = [0u64; 128];
     let count = match len {
         25 => unsafe { process_fixed_25(src, &mut radix_digits) },
