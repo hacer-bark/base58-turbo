@@ -28,7 +28,7 @@
 //! ```rust
 //! # #[cfg(feature = "std")]
 //! # {
-//! use base64_turbo::STANDARD;
+//! use base58_turbo::STANDARD;
 //!
 //! let data = b"Hello world";
 //!
@@ -48,7 +48,7 @@
 //! These methods write directly into a user-provided mutable slice.
 //!
 //! ```rust
-//! use base64_turbo::STANDARD;
+//! use base58_turbo::STANDARD;
 //!
 //! let input = b"Raw bytes";
 //! let mut output = [0u8; 64]; // Pre-allocated stack buffer

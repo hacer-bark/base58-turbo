@@ -11,8 +11,8 @@ default = ["std"]
 std = []
 
 [dev-dependencies]
-rand = "0.9"
-criterion = { version = "0.7", features = ["html_reports"] }
+rand = "0.10"
+criterion = { version = "0.8", features = ["html_reports"] }
 bs58 = "0.5"
 base58 = "0.2"
 five8 = "1"

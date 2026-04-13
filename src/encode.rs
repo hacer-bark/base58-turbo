@@ -610,6 +610,135 @@ pub unsafe fn encode_slice_unsafe(input: &[u8], mut dst: *mut u8, config: &Confi
     unsafe { final_ptr.offset_from(dst_start) as usize }
 }
 
+#[cfg(all(test, miri))]
+mod base58_miri_coverage {
+    use super::*;
+    use rand::{RngExt, rng};
+
+    // --- Mock Infrastructure ---
+    fn random_bytes(len: usize) -> Vec<u8> {
+        let mut rng = rng();
+        (0..len).map(|_| rng.random()).collect()
+    }
+
+    /// Helper to verify Base58 encoding against the 'bs58' crate oracle
+    fn verify_encode(config: &Config, input_len: usize) {
+        let input = random_bytes(input_len);
+        verify_exact(config, &input);
+    }
+
+    /// Helper to verify exact byte slices (useful for testing zero-prefixes)
+    fn verify_exact(config: &Config, input: &[u8]) {
+        // Oracle comparison (Assuming `bs58` crate in dev-dependencies)
+        let expected = bs58::encode(input).into_string();
+
+        // Calculate max safe length for Base58 (approx 138% of input)
+        let len_required = (input.len() * 138) / 100 + 1;
+        let mut dst = vec![0u8; len_required];
+
+        let len = unsafe { encode_slice_unsafe(input, dst.as_mut_ptr(), config) };
+
+        assert_eq!(
+            std::str::from_utf8(&dst[..len]).unwrap(),
+            expected,
+            "Encode failed for input length: {}",
+            input.len()
+        );
+    }
+
+    // ----------------------------------------------------------------------
+    // 1. Fixed Kernel Coverage
+    // ----------------------------------------------------------------------
+
+    #[test]
+    fn miri_base58_encode_fixed_kernels() {
+        // Substitute `Config::default()` with your actual constructor if needed
+        let config = Config::new(b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz").unwrap(); 
+
+        // Hits `process_fixed_25`
+        verify_encode(&config, 25);
+        
+        // Hits `process_fixed_32`
+        verify_encode(&config, 32);
+        
+        // Hits `process_fixed_64`
+        verify_encode(&config, 64);
+        
+        // Hits `process_fixed_69`
+        verify_encode(&config, 69);
+    }
+
+    // ----------------------------------------------------------------------
+    // 2. General Kernel Coverage (Variable Lengths)
+    // ----------------------------------------------------------------------
+
+    #[test]
+    fn miri_base58_encode_general_kernel() {
+        let config = Config::new(b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz").unwrap();
+
+        // Case: < 32 bytes (No jump start, hits 4-byte chunks and tail logic)
+        verify_encode(&config, 3);   // Tail only
+        verify_encode(&config, 4);   // Exactly one 4-byte chunk
+        verify_encode(&config, 15);  // Multiple 4-byte chunks + tail
+
+        // Case: >= 32 bytes, < 64 bytes (Hits 32-byte jump start)
+        verify_encode(&config, 33);
+        verify_encode(&config, 45);
+
+        // Case: >= 64 bytes (Hits 64-byte jump start)
+        verify_encode(&config, 65);
+        verify_encode(&config, 100);
+        
+        // Case: Large payload up to limit
+        verify_encode(&config, 512); 
+    }
+
+    // ----------------------------------------------------------------------
+    // 3. Leading Zeros Logic Coverage
+    // ----------------------------------------------------------------------
+
+    #[test]
+    fn miri_base58_encode_leading_zeros() {
+        let config = Config::new(b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz").unwrap();
+
+        // Single zero (Hits `while len > 0 && *src == 0`)
+        verify_exact(&config, &[0]);
+        
+        // Few zeros (Hits single-byte zero loop)
+        verify_exact(&config, &[0, 0, 0]);
+        
+        // Exactly 8 zeros (Hits the `u64` vectorized zero pattern check)
+        verify_exact(&config, &[0, 0, 0, 0, 0, 0, 0, 0]);
+        
+        // More than 8 zeros (Hits vectorized loop + remainder loop)
+        verify_exact(&config, &[0; 10]);
+        
+        // Entirely zeros matching a fixed kernel size (Ensures it bails early via `if len == 0`)
+        verify_exact(&config, &[0; 25]);
+        
+        // Vectorized zeros followed by data (Hits break condition in vectorized loop)
+        verify_exact(&config, &[0, 0, 0, 0, 0, 0, 0, 0, 255]);
+    }
+
+    // ----------------------------------------------------------------------
+    // 4. Error / Panic Logic Coverage
+    // ----------------------------------------------------------------------
+
+    #[test]
+    #[should_panic(expected = "Input too big!")]
+    fn miri_base58_encode_panic_on_too_large() {
+        let config = Config::new(b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz").unwrap();
+        
+        // Hard limit in code is 512 bytes
+        let input = vec![0u8; 513];
+        let mut dst = vec![0u8; 1000];
+        
+        unsafe { 
+            encode_slice_unsafe(&input, dst.as_mut_ptr(), &config); 
+        }
+    }
+}
+
 // Kani tests are not available yet. Thinking on how to optimize them for real world usage.
 
 // #[cfg(kani)]
