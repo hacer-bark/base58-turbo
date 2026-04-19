@@ -1,4 +1,4 @@
-use crate::{Error, Config};
+use crate::{Config, Error};
 
 // ----------------------------------------------------------------------
 // Constants & Lookups
@@ -13,9 +13,9 @@ const RADIX_58_10: u64 = 430_804_206_899_405_824;
 // ----------------------------------------------------------------------
 
 /// Multiplies the bignum by `multiplier` and adds `addend`.
-/// 
+///
 /// `bignum = bignum * multiplier + addend`
-/// 
+///
 /// Operates on Little Endian u64 digits.
 #[inline(always)]
 unsafe fn bignum_mul_add(digits: &mut [u64], count: &mut usize, multiplier: u64, addend: u64) {
@@ -23,8 +23,22 @@ unsafe fn bignum_mul_add(digits: &mut [u64], count: &mut usize, multiplier: u64,
     let mul = multiplier as u128;
     let len = *count;
 
-    // Standard schoolbook multiplication-with-carry
-    for i in 0..len {
+    // Standard schoolbook multiplication-with-carry (unrolled 2x)
+    let mut i = 0;
+    while i + 1 < len {
+        let digit0 = *unsafe { digits.get_unchecked(i) };
+        let result0 = (digit0 as u128) * mul + carry;
+        *unsafe { digits.get_unchecked_mut(i) } = result0 as u64;
+        let carry0 = result0 >> 64;
+
+        let digit1 = *unsafe { digits.get_unchecked(i + 1) };
+        let result1 = (digit1 as u128) * mul + carry0;
+        *unsafe { digits.get_unchecked_mut(i + 1) } = result1 as u64;
+        carry = result1 >> 64;
+
+        i += 2;
+    }
+    if i < len {
         let digit = *unsafe { digits.get_unchecked(i) };
         let result = (digit as u128) * mul + carry;
         *unsafe { digits.get_unchecked_mut(i) } = result as u64;
@@ -44,13 +58,18 @@ unsafe fn bignum_mul_add(digits: &mut [u64], count: &mut usize, multiplier: u64,
 unsafe fn parse_chunk(config: &Config, src: &[u8]) -> Result<(u64, u64), Error> {
     let mut value = 0u64;
     let mut multiplier = 1u64;
+    let mut bad = 0u8;
 
     for &byte in src {
         let digit = *unsafe { config.decode_map.get_unchecked(byte as usize) };
-        if digit == 255 { return Err(Error::InvalidCharacter); }
+        bad |= digit;
 
         value = value * 58 + (digit as u64);
         multiplier *= 58;
+    }
+
+    if bad & 0x80 != 0 {
+        return Err(Error::InvalidCharacter);
     }
 
     Ok((value, multiplier))
@@ -67,28 +86,53 @@ unsafe fn decode_payload(config: &Config, mut src: &[u8], dst: &mut [u8]) -> Res
     // 1. Accumulation Phase
     // Use a stack-allocated buffer for the bignum (Little Endian u64s).
     // 128 u64s = 1024 bytes, sufficient for very large inputs.
-    let mut bignum = [0u64; 128];
-    let mut count = 1; 
+    // Bypass zero-initialization to avoid memset overhead.
+    let mut bignum_uninit = core::mem::MaybeUninit::<[u64; 128]>::uninit();
+    let bignum_ptr = bignum_uninit.as_mut_ptr() as *mut u64;
+    unsafe { *bignum_ptr = 0; }
+    let bignum = unsafe { &mut *bignum_uninit.as_mut_ptr() };
+    let mut count = 1;
 
     // Process full chunks of 10 characters (Base 58^10)
     // This reduces the bignum loop overhead by 10x.
     while src.len() >= 10 {
         // Unroll parsing for the fixed chunk size
-        let mut chunk = 0u64;
-        for i in 0..10 {
-            let digit = *unsafe { config.decode_map.get_unchecked(*src.get_unchecked(i) as usize) };
-            if digit == 255 { return Err(Error::InvalidCharacter); }
-            chunk = chunk * 58 + (digit as u64);
+        let d0 = *unsafe { config.decode_map.get_unchecked(*src.get_unchecked(0) as usize) } as u64;
+        let d1 = *unsafe { config.decode_map.get_unchecked(*src.get_unchecked(1) as usize) } as u64;
+        let d2 = *unsafe { config.decode_map.get_unchecked(*src.get_unchecked(2) as usize) } as u64;
+        let d3 = *unsafe { config.decode_map.get_unchecked(*src.get_unchecked(3) as usize) } as u64;
+        let d4 = *unsafe { config.decode_map.get_unchecked(*src.get_unchecked(4) as usize) } as u64;
+        let d5 = *unsafe { config.decode_map.get_unchecked(*src.get_unchecked(5) as usize) } as u64;
+        let d6 = *unsafe { config.decode_map.get_unchecked(*src.get_unchecked(6) as usize) } as u64;
+        let d7 = *unsafe { config.decode_map.get_unchecked(*src.get_unchecked(7) as usize) } as u64;
+        let d8 = *unsafe { config.decode_map.get_unchecked(*src.get_unchecked(8) as usize) } as u64;
+        let d9 = *unsafe { config.decode_map.get_unchecked(*src.get_unchecked(9) as usize) } as u64;
+
+        let invalid = (d0 | d1 | d2 | d3 | d4 | d5 | d6 | d7 | d8 | d9) & 0x80;
+        if invalid != 0 {
+            return Err(Error::InvalidCharacter);
         }
-        
-        unsafe { bignum_mul_add(&mut bignum, &mut count, RADIX_58_10, chunk) };
+
+        let v01 = d0 * 58 + d1;
+        let v23 = d2 * 58 + d3;
+        let v45 = d4 * 58 + d5;
+        let v67 = d6 * 58 + d7;
+        let v89 = d8 * 58 + d9;
+
+        let v03 = v01 * 3364 + v23;
+        let v47 = v45 * 3364 + v67;
+
+        let v07 = v03 * 11316496 + v47;
+        let chunk = v07 * 3364 + v89;
+
+        unsafe { bignum_mul_add(bignum, &mut count, RADIX_58_10, chunk) };
         src = &src[10..];
     }
 
     // Process remaining tail (1-9 characters)
     if !src.is_empty() {
         let (chunk, multiplier) = unsafe { parse_chunk(config, src) }?;
-        unsafe { bignum_mul_add(&mut bignum, &mut count, multiplier, chunk) };
+        unsafe { bignum_mul_add(bignum, &mut count, multiplier, chunk) };
     }
 
     // 2. Emission Phase
@@ -103,7 +147,9 @@ unsafe fn decode_payload(config: &Config, mut src: &[u8], dst: &mut [u8]) -> Res
         for _ in 0..8 {
             if out_idx == 0 {
                 // If we run out of space but still have data, fail.
-                if val > 0 || i + 1 < count { return Err(Error::BufferTooSmall); }
+                if val > 0 || i + 1 < count {
+                    return Err(Error::BufferTooSmall);
+                }
                 break;
             }
             out_idx -= 1;
@@ -136,7 +182,11 @@ unsafe fn decode_payload(config: &Config, mut src: &[u8], dst: &mut [u8]) -> Res
 // ----------------------------------------------------------------------
 
 #[inline(always)]
-pub unsafe fn decode_slice_unsafe(input: &[u8], dst: &mut [u8], config: &Config) -> Result<usize, Error> {
+pub unsafe fn decode_slice_unsafe(
+    input: &[u8],
+    dst: &mut [u8],
+    config: &Config,
+) -> Result<usize, Error> {
     // Hard limit of 512 bytes.
     assert!(input.len() <= 512, "Input too big! {}", input.len());
 
@@ -144,12 +194,13 @@ pub unsafe fn decode_slice_unsafe(input: &[u8], dst: &mut [u8], config: &Config)
     let zero_char = *unsafe { config.alphabet.get_unchecked(0) };
 
     let mut leading_zeros = 0;
-    while leading_zeros < input.len() && *unsafe { input.get_unchecked(leading_zeros) } == zero_char {
+    while leading_zeros < input.len() && *unsafe { input.get_unchecked(leading_zeros) } == zero_char
+    {
         leading_zeros += 1;
     }
 
-    if leading_zeros > dst.len() { 
-        return Err(Error::BufferTooSmall); 
+    if leading_zeros > dst.len() {
+        return Err(Error::BufferTooSmall);
     }
 
     // Write the zeros
@@ -159,8 +210,8 @@ pub unsafe fn decode_slice_unsafe(input: &[u8], dst: &mut [u8], config: &Config)
 
     // 2. Decode the rest (The Payload)
     let src = &input[leading_zeros..];
-    if src.is_empty() { 
-        return Ok(leading_zeros); 
+    if src.is_empty() {
+        return Ok(leading_zeros);
     }
 
     let written_payload = unsafe { decode_payload(config, src, &mut dst[leading_zeros..]) }?;

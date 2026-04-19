@@ -405,7 +405,11 @@ unsafe fn process_fixed_69(src: *const u8, out_digits: &mut [u64]) -> usize {
 /// Internal State: Base 58^5 (u32 array).
 #[inline(always)]
 unsafe fn process_general(mut src: *const u8, mut len: usize, out_digits: &mut [u64]) -> usize {
-    let mut digits_5 = [0u32; 300];
+    // Bypass zero-initialization to avoid memset overhead.
+    let mut digits_5_uninit = core::mem::MaybeUninit::<[u32; 300]>::uninit();
+    let digits_5_ptr = digits_5_uninit.as_mut_ptr() as *mut u32;
+    unsafe { *digits_5_ptr = 0; }
+    let digits_5 = unsafe { &mut *digits_5_uninit.as_mut_ptr() };
     let mut count_5 = 1;
 
     // ----------------------------------------------------------------------
@@ -595,17 +599,20 @@ pub unsafe fn encode_slice_unsafe(input: &[u8], mut dst: *mut u8, config: &Confi
     }
 
     // 2. Dispatch to Kernel
-    let mut radix_digits = [0u64; 128];
+    // Bypass zero-initialization to avoid memset overhead.
+    let mut radix_digits_uninit = core::mem::MaybeUninit::<[u64; 128]>::uninit();
+    let radix_digits = unsafe { &mut *radix_digits_uninit.as_mut_ptr() };
+    
     let count = match len {
-        25 => unsafe { process_fixed_25(src, &mut radix_digits) },
-        32 => unsafe { process_fixed_32(src, &mut radix_digits) },
-        64 => unsafe { process_fixed_64(src, &mut radix_digits) },
-        69 => unsafe { process_fixed_69(src, &mut radix_digits) },
-        _  => unsafe { process_general(src, len, &mut radix_digits) },
+        25 => unsafe { process_fixed_25(src, radix_digits) },
+        32 => unsafe { process_fixed_32(src, radix_digits) },
+        64 => unsafe { process_fixed_64(src, radix_digits) },
+        69 => unsafe { process_fixed_69(src, radix_digits) },
+        _  => unsafe { process_general(src, len, radix_digits) },
     };
 
     // 3. Emit String
-    let final_ptr = unsafe { write_digits_to_string(config, &radix_digits, count, dst) };
+    let final_ptr = unsafe { write_digits_to_string(config, radix_digits, count, dst) };
 
     unsafe { final_ptr.offset_from(dst_start) as usize }
 }
