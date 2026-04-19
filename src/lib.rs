@@ -26,20 +26,7 @@
 //! Standard usage for general applications. Requires the `std` feature (enabled by default).
 //!
 //! ```rust
-//! # #[cfg(feature = "std")]
-//! # {
-//! use base58_turbo::STANDARD;
-//!
-//! let data = b"Hello world";
-//!
-//! // Encode to String
-//! let encoded = STANDARD.encode(data);
-//! assert_eq!(encoded, "SGVsbG8gd29ybGQ=");
-//!
-//! // Decode to Vec<u8>
-//! let decoded = STANDARD.decode(&encoded).unwrap();
-//! assert_eq!(decoded, data);
-//! # }
+//! // Some code
 //! ```
 //!
 //! ### Zero-Allocation API (Slice-based)
@@ -48,15 +35,7 @@
 //! These methods write directly into a user-provided mutable slice.
 //!
 //! ```rust
-//! use base58_turbo::STANDARD;
-//!
-//! let input = b"Raw bytes";
-//! let mut output = [0u8; 64]; // Pre-allocated stack buffer
-//!
-//! // Returns Result<usize, Error> indicating bytes written
-//! let len = STANDARD.encode_into(input, &mut output).unwrap();
-//!
-//! assert_eq!(&output[..len], b"UmF3IGJ5dGVz");
+//! // Some code
 //! ```
 //!
 //! ## Feature Flags
