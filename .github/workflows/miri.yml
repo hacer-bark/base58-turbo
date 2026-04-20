@@ -30,7 +30,7 @@ jobs:
           components: miri
 
       - name: Rust Cache
-        uses: Swatinem/rust-cache@v2s
+        uses: Swatinem/rust-cache@v2
 
       - name: Run MIRI
         env:
