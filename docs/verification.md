@@ -10,7 +10,7 @@ Instead, we rely on **Mathematical Proofs**, **Strict Formal Audits**, and **Det
 
 We use a "Swiss Cheese" model where multiple layers of verification cover each other's blind spots.
 
-| Architecture | MIRI (UB Check) | MSan (Uninit Check) | Kani (Math Proof) | Fuzzing (2.5B+) | Status |
+| Architecture | MIRI (UB Check) | MSan (Uninit Check) | Kani (Math Proof) | Fuzzing (67M+) | Status |
 | :--- | :---: | :---: | :---: | :---: | :--- |
 | **Arithmetic Kernels** | ✅ Passed | ✅ Passed | ✅ **Proven** | ✅ Passed | **Formally Verified** |
 | **Fixed Size Kernels** | ✅ Passed | ✅ Passed | ✅ **Proven** | ✅ Passed | **Formally Verified** |

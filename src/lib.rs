@@ -3,7 +3,6 @@
 //! [![Crates.io](https://img.shields.io/crates/v/base58-turbo.svg)](https://crates.io/crates/base58-turbo)
 //! [![Documentation](https://docs.rs/base58-turbo/badge.svg)](https://docs.rs/base58-turbo)
 //! [![License](https://img.shields.io/github/license/hacer-bark/base58-turbo)](https://github.com/hacer-bark/base58-turbo/blob/main/LICENSE)
-//! [![Kani Verified](https://img.shields.io/github/actions/workflow/status/hacer-bark/base58-turbo/verification.yml?label=Kani%20Verified)](https://github.com/hacer-bark/base58-turbo/actions/workflows/verification.yml)
 //! [![MIRI Verified](https://img.shields.io/github/actions/workflow/status/hacer-bark/base58-turbo/miri.yml?label=MIRI%20Verified)](https://github.com/hacer-bark/base58-turbo/actions/workflows/miri.yml)
 //! [![Logic Tests](https://img.shields.io/github/actions/workflow/status/hacer-bark/base58-turbo/tests.yml?label=Logic%20Tests)](https://github.com/hacer-bark/base58-turbo/actions/workflows/tests.yml)
 //!

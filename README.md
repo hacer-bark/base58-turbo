@@ -2,7 +2,6 @@
 
 [![Crates.io](https://img.shields.io/crates/v/base58-turbo.svg)](https://crates.io/crates/base58-turbo)
 [![License](https://img.shields.io/crates/l/base58-turbo.svg)](https://crates.io/crates/base58-turbo)
-[![Kani Verified](https://img.shields.io/github/actions/workflow/status/hacer-bark/base58-turbo/verification.yml?label=Kani%20Verified)](https://github.com/hacer-bark/base58-turbo/actions/workflows/verification.yml)
 [![MIRI Verified](https://img.shields.io/github/actions/workflow/status/hacer-bark/base58-turbo/miri.yml?label=MIRI%20Verified)](https://github.com/hacer-bark/base58-turbo/actions/workflows/miri.yml)
 [![Logic Tests](https://img.shields.io/github/actions/workflow/status/hacer-bark/base58-turbo/tests.yml?label=Logic%20Tests)](https://github.com/hacer-bark/base58-turbo/actions/workflows/tests.yml)
 
@@ -28,7 +27,10 @@ use base58_turbo::BITCOIN;
 
 fn main() {
     let data = b"Hello World";
+
+    // Returns Result<String, Error>
     let encoded = BITCOIN.encode(data).unwrap();
+
     assert_eq!(encoded, "JxF12TrwUP45BMd");
 }
 ```
@@ -40,10 +42,10 @@ use base58_turbo::BITCOIN;
 
 fn main() {
     let encoded = "JxF12TrwUP45BMd";
-    
+
     // Returns Result<Vec<u8>, Error>
     let decoded = BITCOIN.decode(encoded).unwrap();
-    
+
     assert_eq!(decoded, b"Hello World");
 }
 ```
@@ -97,15 +99,14 @@ The public API (traits, structs, and error types) is considered **Stable**.
 
 ### Benchmarks
 
-| Operation | `base58-turbo` | `bs58` | Speedup |
-| :--- | :--- | :--- | :--- |
-| Encode (32B) | *[TBD]* | *[TBD]* | *[TBD]* |
-| Decode (32B) | *[TBD]* | *[TBD]* | *[TBD]* |
-| Encode (1KB) | *[TBD]* | *[TBD]* | *[TBD]* |
-| Decode (1KB) | *[TBD]* | *[TBD]* | *[TBD]* |
-
-> [!NOTE]
-> Benchmarks are currently being finalized. Early results indicate significant performance gains over existing Rust implementations due to our optimized arithmetic kernels.
+| Operation       | `base58-turbo`                  | `bs58`                        | Speedup    |
+|-----------------|---------------------------------|-------------------------------|------------|
+| Encode (32B)    | 43.3 ns<br>(705 MiB/s)          | 885 ns<br>(34.5 MiB/s)        | **20.5×**  |
+| Decode (32B)    | 38.6 ns<br>(1.06 GiB/s)         | 313 ns<br>(134 MiB/s)         | **8.1×**   |
+| Encode (64B)    | 111 ns<br>(550 MiB/s)           | 3.97 µs<br>(15.4 MiB/s)       | **35.8×**  |
+| Decode (64B)    | 74.1 ns<br>(1.11 GiB/s)         | 1.25 µs<br>(67.1 MiB/s)       | **16.9×**  |
+| Encode (128B)   | 550 ns<br>(222 MiB/s)           | 17.4 µs<br>(7.02 MiB/s)       | **31.6×**  |
+| Decode (128B)   | 175 ns<br>(952 MiB/s)           | 5.09 µs<br>(32.8 MiB/s)       | **29.0×**  |
 
 ## Safety & Verification
 
@@ -127,7 +128,6 @@ Achieving maximum throughput must not cost memory safety. While we leverage `uns
 ## Documentation
 
 *   [**Architecture & Design**](https://github.com/hacer-bark/base58-turbo/blob/main/docs/design.md) - Deep dive into our bignum optimizations.
-*   [**Ecosystem Comparison**](https://github.com/hacer-bark/base58-turbo/blob/main/docs/ecosystem_comparison.md) - How we compare to `bs58` and others.
 *   [**Safety & Verification**](https://github.com/hacer-bark/base58-turbo/blob/main/docs/verification.md) - Proofs, MIRI logs, and audit strategy.
 
 ## License
