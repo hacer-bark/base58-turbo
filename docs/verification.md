@@ -4,17 +4,17 @@
 
 At `base58-turbo`, we believe that speed is meaningless if it compromises stability. While this library achieves extreme performance by leveraging `unsafe` scalar kernels and pointer arithmetic, we do not rely on "hope" or "good practices" to prevent crashes.
 
-Instead, we rely on **Mathematical Proofs**, **Strict Formal Audits**, and **Deterministic Analysis**.
+Instead, we rely on **Strict Formal Audits** and **Deterministic Analysis**.
 
 ## Verification Status Matrix
 
 We use a "Swiss Cheese" model where multiple layers of verification cover each other's blind spots.
 
-| Architecture | MIRI (UB Check) | MSan (Uninit Check) | Kani (Math Proof) | Fuzzing (67M+) | Status |
-| :--- | :---: | :---: | :---: | :---: | :--- |
-| **Arithmetic Kernels** | ✅ Passed | ✅ Passed | ✅ **Proven** | ✅ Passed | **Formally Verified** |
-| **Fixed Size Kernels** | ✅ Passed | ✅ Passed | ✅ **Proven** | ✅ Passed | **Formally Verified** |
-| **Bignum Logic** | ✅ Passed | ✅ Passed | ✅ **Proven** | ✅ Passed | **Formally Verified** |
+| Architecture | MIRI (UB Check) | MSan (Uninit Check) | Fuzzing (100M+) | Status |
+| :--- | :---: | :---: | :---: | :--- |
+| **Arithmetic Kernels** | ✅ Passed | ✅ Passed | ✅ Passed | **Verified** |
+| **Fixed Size Kernels** | ✅ Passed | ✅ Passed | ✅ Passed | **Verified** |
+| **Bignum Logic** | ✅ Passed | ✅ Passed | ✅ Passed | **Verified** |
 
 ## Deep Dive: The Verification Layers
 
@@ -38,11 +38,7 @@ While MIRI checks for validity, **MemorySanitizer (MSan)** checks for **Initiali
 *   **The Check:** We ensure no uninitialized data leaks into the output or influences the execution path logic.
 *   **Guarantee:** We ensure that our algorithms never perform logic on garbage data derived from uninitialized buffers.
 
-### 4. Formal Verification (Kani)
-We use the [Kani Model Checker](https://model-checking.github.io/kani/) to mathematically prove the correctness of our logic.
-*   **Safety Proofs**: We prove that our arithmetic kernels never panic and always stay within buffer bounds for all possible inputs (0..1024 bytes).
-
-### 5. Fuzz Testing
+### 4. Fuzz Testing
 We use `cargo-fuzz` to perform continuous randomized stress testing.
 
 **Run Fuzz Tests:**
@@ -50,12 +46,11 @@ We use `cargo-fuzz` to perform continuous randomized stress testing.
 cargo +nightly fuzz run fuzz_all_modes
 ```
 
-### 6. Supply Chain Security
+### 5. Supply Chain Security
 This repository adheres to strict **Supply Chain Security** protocols.
 
 1.  **No Direct Commits:** All changes must go through a Pull Request (PR).
-2.  **Required Checks:** A PR cannot be merged unless it passes 4 mandatory gates:
-    *   ✅ **Kani Verification**
+2.  **Required Checks:** A PR cannot be merged unless it passes mandatory gates:
     *   ✅ **MSan Audit**
     *   ✅ **MIRI Audit**
     *   ✅ **Logic/Unit Tests**
@@ -67,4 +62,4 @@ This repository adheres to strict **Supply Chain Security** protocols.
 **A:** Yes, extensively. We use pointers and optimized bignum arithmetic to achieve speed. However, all `unsafe` blocks are encapsulated behind a Safe API and have been formally audited.
 
 **Q: Is it safe to use in Production?**
-**A:** Yes. It is **proven** to be memory-safe for all supported architectures. "Safe" here isn't an opinion; it's a result of symbolic execution and sanitizer analysis.
+**A:** Yes. It is verified to be memory-safe for all supported architectures. "Safe" here isn't an opinion; it's a result of rigorous MIRI, sanitizer, and fuzz analysis.

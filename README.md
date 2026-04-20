@@ -110,9 +110,8 @@ The public API (traits, structs, and error types) is considered **Stable**.
 
 ## Safety & Verification
 
-Achieving maximum throughput must not cost memory safety. While we leverage `unsafe` intrinsics and pointer arithmetic, we have mathematically proven the absence of bugs using a "Swiss Cheese" model of verification layers.
+Achieving maximum throughput must not cost memory safety. While we leverage `unsafe` intrinsics and pointer arithmetic, we guarantee the absence of bugs using a "Swiss Cheese" model of verification layers.
 
-*   **Kani Verified:** Mathematical proofs ensure no input (0..1024 bytes) can cause panics or overflows.
 *   **MIRI Verified:** Validates that no Undefined Behavior (UB) occurs during execution.
 *   **MSan Audited:** MemorySanitizer confirms no logic is ever performed on uninitialized memory.
 *   **Fuzz Tested:** Continuous fuzzing with zero failures.

@@ -63,8 +63,8 @@
 //!
 //! This crate utilizes `unsafe` code for pointer arithmetic and optimized kernels to achieve maximum performance.
 //!
-//! *   **Formal Verification (Kani):** Is in plan of implementation.
 //! *   **MIRI Tests:** Core logic and fallbacks are verified with **MIRI** (Undefined Behavior checker) in CI.
+//! *   **MSan Audited:** MemorySanitizer confirms no logic is ever performed on uninitialized memory.
 //! *   **Fuzzing:** The codebase is continuously fuzz-tested via `cargo-fuzz`.
 //!
 //! **[Learn More](https://github.com/hacer-bark/base58-turbo/blob/main/docs/verification.md)**: Details on our threat model and formal verification strategy.
