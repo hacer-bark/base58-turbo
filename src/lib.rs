@@ -64,9 +64,9 @@
 //!
 //! This crate utilizes `unsafe` code for pointer arithmetic and optimized kernels to achieve maximum performance.
 //!
-//! *   **Formal Verification (Kani):** Core arithmetic kernels are mathematically proven to be UB-free and panic-free.
+//! *   **Formal Verification (Kani):** Is in plan of implementation.
 //! *   **MIRI Tests:** Core logic and fallbacks are verified with **MIRI** (Undefined Behavior checker) in CI.
-//! *   **Fuzzing:** The codebase is fuzz-tested via `cargo-fuzz`.
+//! *   **Fuzzing:** The codebase is continuously fuzz-tested via `cargo-fuzz`.
 //!
 //! **[Learn More](https://github.com/hacer-bark/base58-turbo/blob/main/docs/verification.md)**: Details on our threat model and formal verification strategy.
 
@@ -94,7 +94,7 @@ pub enum Error {
     InvalidCharacter,
     /// The output buffer is too small to hold the result.
     BufferTooSmall,
-    /// The input data is too big to process. Limit is 1024 bytes.
+    /// The input data is too big to process. Limit is 1024 bytes (encode) or 2048 bytes (decode).
     InputTooBig,
     /// The input alphabet has duplicate chars.
     WrongAlphabet,
@@ -105,7 +105,7 @@ impl core::fmt::Display for Error {
         match self {
             Error::InvalidCharacter => write!(f, "invalid character in base58 string"),
             Error::BufferTooSmall => write!(f, "output buffer too small"),
-            Error::InputTooBig => write!(f, "input data too big (max 1024 bytes)"),
+            Error::InputTooBig => write!(f, "input data too big"),
             Error::WrongAlphabet => write!(f, "input alphabet has duplicate chars"),
         }
     }
@@ -294,7 +294,7 @@ impl Engine {
         if input.is_empty() {
             return Ok(0);
         }
-        if input.len() > 1024 {
+        if input.len() > 2048 {
             return Err(Error::InputTooBig);
         }
 
@@ -372,7 +372,7 @@ impl Engine {
         if input.is_empty() {
             return Ok(Vec::new());
         }
-        if input.len() > 1024 {
+        if input.len() > 2048 {
             return Err(Error::InputTooBig);
         }
 

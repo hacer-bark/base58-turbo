@@ -16,9 +16,9 @@ const RADIX_58_10: u64 = 430_804_206_899_405_824;
 ///
 /// `bignum = bignum * multiplier + addend`
 ///
-/// Operates on Little Endian u64 digits.
+/// Operates on Little Endian u64 digits. Returns true on success, false on overflow.
 #[inline(always)]
-unsafe fn bignum_mul_add(digits: &mut [u64], count: &mut usize, multiplier: u64, addend: u64) {
+unsafe fn bignum_mul_add(digits: &mut [u64], count: &mut usize, multiplier: u64, addend: u64) -> bool {
     let mut carry = addend as u128;
     let mul = multiplier as u128;
     let len = *count;
@@ -47,9 +47,13 @@ unsafe fn bignum_mul_add(digits: &mut [u64], count: &mut usize, multiplier: u64,
 
     // Expand bignum if there is a remaining carry
     if carry > 0 {
+        if len >= digits.len() {
+            return false;
+        }
         *unsafe { digits.get_unchecked_mut(len) } = carry as u64;
         *count += 1;
     }
+    true
 }
 
 /// Parses a chunk of Base58 characters into a u64 value.
@@ -167,14 +171,26 @@ unsafe fn decode_payload(config: &Config, mut src: &[u8], dst: &mut [u8]) -> Res
         let v07 = v03 * 11316496 + v47;
         let chunk = v07 * 3364 + v89;
 
-        unsafe { bignum_mul_add(bignum, &mut count, RADIX_58_10, chunk) };
+        if !unsafe { bignum_mul_add(bignum, &mut count, RADIX_58_10, chunk) } {
+            return Err(Error::InputTooBig);
+        }
+        // Enforce 1024-byte decoded limit (128 u64 words)
+        if count > 128 {
+            return Err(Error::InputTooBig);
+        }
         src = &src[10..];
     }
 
     // Process remaining tail (1-9 characters)
     if !src.is_empty() {
         let (chunk, multiplier) = unsafe { parse_chunk(config, src) }?;
-        unsafe { bignum_mul_add(bignum, &mut count, multiplier, chunk) };
+        if !unsafe { bignum_mul_add(bignum, &mut count, multiplier, chunk) } {
+            return Err(Error::InputTooBig);
+        }
+    }
+
+    if count > 128 {
+        return Err(Error::InputTooBig);
     }
 
     // 2. Emission Phase
@@ -229,8 +245,8 @@ pub unsafe fn decode_slice_unsafe(
     dst: &mut [u8],
     config: &Config,
 ) -> Result<usize, Error> {
-    // Hard limit of 1024 bytes.
-    assert!(input.len() <= 1024, "Input too big! {}", input.len());
+    // Hard limit of 2048 bytes.
+    assert!(input.len() <= 2048, "Input too big! {}", input.len());
 
     // 1. Handle Leading Zeros
     let zero_char = *unsafe { config.alphabet.get_unchecked(0) };
@@ -239,6 +255,10 @@ pub unsafe fn decode_slice_unsafe(
     while leading_zeros < input.len() && *unsafe { input.get_unchecked(leading_zeros) } == zero_char
     {
         leading_zeros += 1;
+    }
+
+    if leading_zeros > 1024 {
+        return Err(Error::InputTooBig);
     }
 
     if leading_zeros > dst.len() {
@@ -257,8 +277,13 @@ pub unsafe fn decode_slice_unsafe(
     }
 
     let written_payload = unsafe { decode_payload(config, src, &mut dst[leading_zeros..]) }?;
+    let total_len = leading_zeros + written_payload;
 
-    Ok(leading_zeros + written_payload)
+    if total_len > 1024 {
+        return Err(Error::InputTooBig);
+    }
+
+    Ok(total_len)
 }
 
 #[cfg(test)]

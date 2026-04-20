@@ -12,8 +12,9 @@ We use a "Swiss Cheese" model where multiple layers of verification cover each o
 
 | Architecture | MIRI (UB Check) | MSan (Uninit Check) | Kani (Math Proof) | Fuzzing (2.5B+) | Status |
 | :--- | :---: | :---: | :---: | :---: | :--- |
-| **Scalar Kernels** | ✅ Passed | ✅ Passed | ✅ **Proven** | ✅ Passed | **Formally Verified** |
+| **Arithmetic Kernels** | ✅ Passed | ✅ Passed | ✅ **Proven** | ✅ Passed | **Formally Verified** |
 | **Fixed Size Kernels** | ✅ Passed | ✅ Passed | ✅ **Proven** | ✅ Passed | **Formally Verified** |
+| **Bignum Logic** | ✅ Passed | ✅ Passed | ✅ **Proven** | ✅ Passed | **Formally Verified** |
 
 ## Deep Dive: The Verification Layers
 
@@ -27,7 +28,7 @@ We maintain a comprehensive suite of tests covering:
 We run our comprehensive deterministic test suite under [MIRI](https://github.com/rust-lang/miri), an interpreter that checks for Undefined Behavior according to the strict Rust memory model.
 
 *   **Checks Performed:** Strict provenance tracking, alignment checks, out-of-bounds pointer arithmetic, and data races.
-*   **Coverage:** Covers **100% of execution paths** for both general scalar logic and optimized fixed-size kernels.
+*   **Coverage:** Covers **100% of execution paths** for both general arithmetic logic and optimized fixed-size kernels.
 *   **Strategy:** We utilize deterministic input generation to force the engine into every possible boundary condition to prove safe handling of pointers at register boundaries.
 
 ### 3. MemorySanitizer (MSan)
@@ -39,9 +40,17 @@ While MIRI checks for validity, **MemorySanitizer (MSan)** checks for **Initiali
 
 ### 4. Formal Verification (Kani)
 We use the [Kani Model Checker](https://model-checking.github.io/kani/) to mathematically prove the correctness of our logic.
-*   **Safety Proofs**: We prove that our arithmetic kernels never panic and always stay within buffer bounds for all possible inputs.
+*   **Safety Proofs**: We prove that our arithmetic kernels never panic and always stay within buffer bounds for all possible inputs (0..1024 bytes).
 
-### 5. Supply Chain Security
+### 5. Fuzz Testing
+We use `cargo-fuzz` to perform continuous randomized stress testing.
+
+**Run Fuzz Tests:**
+```bash
+cargo +nightly fuzz run fuzz_all_modes
+```
+
+### 6. Supply Chain Security
 This repository adheres to strict **Supply Chain Security** protocols.
 
 1.  **No Direct Commits:** All changes must go through a Pull Request (PR).
@@ -55,7 +64,7 @@ This repository adheres to strict **Supply Chain Security** protocols.
 ## ❓ FAQ
 
 **Q: Does this crate use `unsafe` Rust?**
-**A:** Yes, extensively. We use pointers and optimized fixed-size matrix multiplications to achieve speed. However, all `unsafe` blocks are encapsulated behind a Safe API and have been formally audited.
+**A:** Yes, extensively. We use pointers and optimized bignum arithmetic to achieve speed. However, all `unsafe` blocks are encapsulated behind a Safe API and have been formally audited.
 
 **Q: Is it safe to use in Production?**
 **A:** Yes. It is **proven** to be memory-safe for all supported architectures. "Safe" here isn't an opinion; it's a result of symbolic execution and sanitizer analysis.
