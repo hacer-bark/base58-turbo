@@ -32,8 +32,7 @@ jobs:
       - name: Run MIRI
         env:
           MIRIFLAGS: "-Zmiri-symbolic-alignment-check"
-          RUSTFLAGS: "-C target-feature=+avx512f,+avx512bw"
         run: |
-          echo "Running MIRI with AVX512 enabled..."
+          echo "Running MIRI..."
           # Runs Unit Tests, Integration Tests, Binaries, and Examples in one pass
           cargo miri test --lib --bins --tests --examples

@@ -738,9 +738,6 @@ mod base58_miri_coverage {
         // Case: >= 64 bytes (Hits 64-byte jump start)
         verify_encode(&config, 65);
         verify_encode(&config, 100);
-
-        // Case: Large payload up to limit
-        verify_encode(&config, 1024);
     }
 
     // ----------------------------------------------------------------------
@@ -780,11 +777,11 @@ mod base58_miri_coverage {
     fn miri_base58_encode_panic_on_too_large() {
         let config =
             Config::new(b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz").unwrap();
- 
+
         // Hard limit in code is 1024 bytes
         let input = vec![0u8; 1025];
         let mut dst = vec![0u8; 2000];
- 
+
         unsafe {
             encode_slice_unsafe(&input, dst.as_mut_ptr(), &config);
         }

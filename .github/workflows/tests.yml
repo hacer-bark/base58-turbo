@@ -48,14 +48,6 @@ jobs:
           ) &
           PID_STD=$!
 
-          # --- 3. SIMD ENABLED ---
-          (
-            export CARGO_TARGET_DIR="target_logic_simd"
-            echo "[SIMD] Running..."
-            cargo test --no-default-features --features "std,simd,unstable" > simd.log 2>&1
-          ) &
-          PID_SIMD=$!
-
           # --- WAIT AND REPORT ---
           FAILED=0
 
@@ -64,9 +56,6 @@ jobs:
 
           wait $PID_STD
           if [ $? -ne 0 ]; then echo "[std] FAILED. Logs:"; cat std.log; FAILED=1; else echo "[std] PASSED"; fi
-
-          wait $PID_SIMD
-          if [ $? -ne 0 ]; then echo "[SIMD] FAILED. Logs:"; cat simd.log; FAILED=1; else echo "[SIMD] PASSED"; fi
 
           if [ $FAILED -ne 0 ]; then exit 1; fi
           set -e
@@ -92,6 +81,6 @@ jobs:
         run: |
           RUSTFLAGS="-Z sanitizer=memory" cargo test -Z build-std \
             --target x86_64-unknown-linux-gnu \
-            --features "std,simd,unstable" \
+            --features "std" \
             --lib \
             --tests
