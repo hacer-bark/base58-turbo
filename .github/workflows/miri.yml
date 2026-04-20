@@ -29,6 +29,9 @@ jobs:
         with:
           components: miri
 
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2s
+
       - name: Run MIRI
         env:
           MIRIFLAGS: "-Zmiri-symbolic-alignment-check"

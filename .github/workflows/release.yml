@@ -15,6 +15,10 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
       - name: Verify Tag matches Cargo.toml
         # Sanity check: Ensure git tag "v0.1.0" matches Cargo.toml "0.1.0"
         run: |

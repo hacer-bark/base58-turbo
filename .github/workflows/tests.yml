@@ -27,6 +27,9 @@ jobs:
       - name: Install Rust Stable
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
       - name: Run Parallel Logic Tests
         run: |
           set +e
@@ -61,9 +64,9 @@ jobs:
           set -e
           echo "All Logic tests passed!"
 
-      - name: Cleanup Artifacts
+      - name: Cleanup Logs
         if: always()
-        run: rm -rf target_logic_* *.log
+        run: rm -f *.log
 
   security-msan:
     name: MemorySanitizer (Nightly)
@@ -76,6 +79,9 @@ jobs:
         uses: dtolnay/rust-toolchain@nightly
         with:
           components: rust-src 
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
 
       - name: Run MSan (Full Features)
         run: |
