@@ -1,16 +1,16 @@
-//! # Base64 Turbo
+//! # Base58 Turbo
 //!
-//! [![Crates.io](https://img.shields.io/crates/v/base64-turbo.svg)](https://crates.io/crates/base64-turbo)
-//! [![Documentation](https://docs.rs/base64-turbo/badge.svg)](https://docs.rs/base64-turbo)
-//! [![License](https://img.shields.io/github/license/hacer-bark/base64-turbo)](https://github.com/hacer-bark/base64-turbo/blob/main/LICENSE)
-//! [![Kani Verified](https://img.shields.io/github/actions/workflow/status/hacer-bark/base64-turbo/verification.yml?label=Kani%20Verified)](https://github.com/hacer-bark/base64-turbo/actions/workflows/verification.yml)
-//! [![MIRI Verified](https://img.shields.io/github/actions/workflow/status/hacer-bark/base64-turbo/miri.yml?label=MIRI%20Verified)](https://github.com/hacer-bark/base64-turbo/actions/workflows/miri.yml)
-//! [![Logic Tests](https://img.shields.io/github/actions/workflow/status/hacer-bark/base64-turbo/tests.yml?label=Logic%20Tests)](https://github.com/hacer-bark/base64-turbo/actions/workflows/tests.yml)
+//! [![Crates.io](https://img.shields.io/crates/v/base58-turbo.svg)](https://crates.io/crates/base58-turbo)
+//! [![Documentation](https://docs.rs/base58-turbo/badge.svg)](https://docs.rs/base58-turbo)
+//! [![License](https://img.shields.io/github/license/hacer-bark/base58-turbo)](https://github.com/hacer-bark/base58-turbo/blob/main/LICENSE)
+//! [![Kani Verified](https://img.shields.io/github/actions/workflow/status/hacer-bark/base58-turbo/verification.yml?label=Kani%20Verified)](https://github.com/hacer-bark/base58-turbo/actions/workflows/verification.yml)
+//! [![MIRI Verified](https://img.shields.io/github/actions/workflow/status/hacer-bark/base58-turbo/miri.yml?label=MIRI%20Verified)](https://github.com/hacer-bark/base58-turbo/actions/workflows/miri.yml)
+//! [![Logic Tests](https://img.shields.io/github/actions/workflow/status/hacer-bark/base58-turbo/tests.yml?label=Logic%20Tests)](https://github.com/hacer-bark/base58-turbo/actions/workflows/tests.yml)
 //!
-//! A SIMD-accelerated Base64 encoder/decoder for Rust, optimized for high-throughput systems.
+//! A high-performance Base58 encoder/decoder for Rust, optimized for high-throughput systems.
 //!
-//! This crate provides runtime CPU detection to utilize AVX2, SSE4.1, or AVX512 (via feature flag) intrinsics.
-//! It includes a highly optimized scalar fallback for non-SIMD targets and supports `no_std` environments.
+//! This crate provides highly optimized scalar kernels for encoding and decoding,
+//! supporting `no_std` environments and zero-allocation processing.
 //!
 //! ## Usage
 //!
@@ -18,7 +18,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! base64-turbo = "0.1"
+//! base58-turbo = "0.1"
 //! ```
 //!
 //! ### Basic API (Allocating)
@@ -26,7 +26,14 @@
 //! Standard usage for general applications. Requires the `std` feature (enabled by default).
 //!
 //! ```rust
-//! // Some code
+//! use base58_turbo::BITCOIN;
+//!
+//! let data = b"Hello World";
+//! let encoded = BITCOIN.encode(data).unwrap();
+//! assert_eq!(encoded, "JxF12TrwUP45BMd");
+//!
+//! let decoded = BITCOIN.decode(&encoded).unwrap();
+//! assert_eq!(decoded, data);
 //! ```
 //!
 //! ### Zero-Allocation API (Slice-based)
@@ -35,44 +42,46 @@
 //! These methods write directly into a user-provided mutable slice.
 //!
 //! ```rust
-//! // Some code
+//! use base58_turbo::BITCOIN;
+//!
+//! let data = b"Hello World";
+//! let mut output = [0u8; 32];
+//!
+//! let len = BITCOIN.encode_into(data, &mut output).unwrap();
+//! let encoded = std::str::from_utf8(&output[..len]).unwrap();
+//! assert_eq!(encoded, "JxF12TrwUP45BMd");
 //! ```
 //!
 //! ## Feature Flags
 //!
-//! This crate is highly configurable via Cargo features:
+//! This crate is lightweight and configurable via Cargo features:
 //!
 //! | Feature | Default | Description |
 //! |---------|---------|-------------|
 //! | **`std`** | **Yes** | Enables `String` and `Vec` support. Disable this for `no_std` environments. |
-//! | **`simd`** | **Yes** | Enables runtime detection for AVX2 and SSE4.1 intrinsics. If disabled or unsupported by hardware, the crate falls back to scalar logic automatic. |
-//! | **`parallel`** | **No** | Enables [Rayon](https://crates.io/crates/rayon) support. Automatically parallelizes processing for payloads larger than 512KB. Recommended only for massive data ingestion tasks. |
-//! | **`avx512`** | **No** | Enables AVX512 intrinsics. |
-//! | **`unstable`** | **No** | Enables access to the raw, unsafe functions. |
 //!
 //! ## Safety & Verification
 //!
-//! This crate utilizes `unsafe` code for SIMD intrinsics and pointer arithmetic to achieve maximum performance.
+//! This crate utilizes `unsafe` code for pointer arithmetic and optimized kernels to achieve maximum performance.
 //!
-//! *   **Formal Verification (Kani):** Scalar (Done), SSE4.1 (In Progress), AVX2 (Done), AVX512 (In Progress) code mathematic proven to be UB free and panic free.
-//! *   **MIRI Tests:** Core SIMD logic and scalar fallbacks are verified with **MIRI** (Undefined Behavior checker) in CI.
+//! *   **Formal Verification (Kani):** Core arithmetic kernels are mathematically proven to be UB-free and panic-free.
+//! *   **MIRI Tests:** Core logic and fallbacks are verified with **MIRI** (Undefined Behavior checker) in CI.
 //! *   **Fuzzing:** The codebase is fuzz-tested via `cargo-fuzz`.
-//! *   **Fallback:** Invalid or unsupported hardware instruction sets are detected at runtime, ensuring safe fallback to scalar code.
-//! 
-//! **[Learn More](https://github.com/hacer-bark/base64-turbo/blob/main/docs/verification.md)**: Details on our threat model and formal verification strategy.
+//!
+//! **[Learn More](https://github.com/hacer-bark/base58-turbo/blob/main/docs/verification.md)**: Details on our threat model and formal verification strategy.
 
 #![cfg_attr(not(any(feature = "std", test)), no_std)]
 #![doc(issue_tracker_base_url = "https://github.com/hacer-bark/base58-turbo/issues/")]
-// #![deny(unsafe_op_in_unsafe_fn)]
+#![deny(unsafe_op_in_unsafe_fn)]
 #![warn(missing_docs)]
 #![warn(rust_2018_idioms)]
 #![warn(unused_qualifications)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
-mod encode;
 mod decode;
-use encode::encode_slice_unsafe;
+mod encode;
 use decode::decode_slice_unsafe;
+use encode::encode_slice_unsafe;
 
 // ======================================================================
 // Errors
@@ -85,7 +94,7 @@ pub enum Error {
     InvalidCharacter,
     /// The output buffer is too small to hold the result.
     BufferTooSmall,
-    /// The input data is too big to process. Limit is 512 bytes.
+    /// The input data is too big to process. Limit is 1024 bytes.
     InputTooBig,
     /// The input alphabet has duplicate chars.
     WrongAlphabet,
@@ -96,7 +105,7 @@ impl core::fmt::Display for Error {
         match self {
             Error::InvalidCharacter => write!(f, "invalid character in base58 string"),
             Error::BufferTooSmall => write!(f, "output buffer too small"),
-            Error::InputTooBig => write!(f, "input data too big (max 512 bytes)"),
+            Error::InputTooBig => write!(f, "input data too big (max 1024 bytes)"),
             Error::WrongAlphabet => write!(f, "input alphabet has duplicate chars"),
         }
     }
@@ -162,28 +171,32 @@ pub struct Engine {
 // ======================================================================
 
 /// Standard Bitcoin Base58 Engine.
-pub const BITCOIN: Engine = match Engine::new(b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz") {
-    Ok(e) => e,
-    Err(_) => panic!("Invalid Bitcoin alphabet definition"),
-};
+pub const BITCOIN: Engine =
+    match Engine::new(b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz") {
+        Ok(e) => e,
+        Err(_) => panic!("Invalid Bitcoin alphabet definition"),
+    };
 
 /// Monero Base58 Engine.
-pub const MONERO: Engine = match Engine::new(b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz") {
-    Ok(e) => e,
-    Err(_) => panic!("Invalid Monero alphabet definition"),
-};
+pub const MONERO: Engine =
+    match Engine::new(b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz") {
+        Ok(e) => e,
+        Err(_) => panic!("Invalid Monero alphabet definition"),
+    };
 
 /// Ripple Base58 Engine.
-pub const RIPPLE: Engine = match Engine::new(b"rpshnaf39wBUDNEGHJKLM4PQRST7VWXYZ2bcdeCg65jkm8oFqi1tuvAxyz") {
-    Ok(e) => e,
-    Err(_) => panic!("Invalid Ripple alphabet definition"),
-};
+pub const RIPPLE: Engine =
+    match Engine::new(b"rpshnaf39wBUDNEGHJKLM4PQRST7VWXYZ2bcdeCg65jkm8oFqi1tuvAxyz") {
+        Ok(e) => e,
+        Err(_) => panic!("Invalid Ripple alphabet definition"),
+    };
 
 /// Flickr Base58 Engine.
-pub const FLICKR: Engine = match Engine::new(b"123456789abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ") {
-    Ok(e) => e,
-    Err(_) => panic!("Invalid Flickr alphabet definition"),
-};
+pub const FLICKR: Engine =
+    match Engine::new(b"123456789abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ") {
+        Ok(e) => e,
+        Err(_) => panic!("Invalid Flickr alphabet definition"),
+    };
 
 // ======================================================================
 // Const Table Generators
@@ -250,29 +263,25 @@ impl Engine {
     /// Encodes `input` into the `output` buffer.
     /// Returns the actual number of bytes written.
     #[inline]
-    pub fn encode_into<T: AsRef<[u8]>>(
-        &self,
-        input: T,
-        output: &mut [u8],
-    ) -> Result<usize, Error> {
+    pub fn encode_into<T: AsRef<[u8]>>(&self, input: T, output: &mut [u8]) -> Result<usize, Error> {
         let input = input.as_ref();
-        if input.is_empty() { return Ok(0); }
-        if input.len() > 512 { return  Err(Error::InputTooBig); }
+        if input.is_empty() {
+            return Ok(0);
+        }
+        if input.len() > 1024 {
+            return Err(Error::InputTooBig);
+        }
 
         let req_len = self.encoded_len(input.len());
-        if output.len() < req_len { return Err(Error::BufferTooSmall); }
+        if output.len() < req_len {
+            return Err(Error::BufferTooSmall);
+        }
 
-        // SAFETY: 
+        // SAFETY:
         // 1. We checked output has sufficient capacity above.
         // 2. We assume `encode_slice_unsafe` respects the pointer limits.
         // 3. We assume `encode_slice_unsafe` uses `self.config` for the alphabet.
-        let actual_len = unsafe { 
-            encode_slice_unsafe(
-                input,
-                output.as_mut_ptr(),
-                &self.config,
-            ) 
-        };
+        let actual_len = unsafe { encode_slice_unsafe(input, output.as_mut_ptr(), &self.config) };
 
         Ok(actual_len)
     }
@@ -280,31 +289,27 @@ impl Engine {
     /// Decodes `input` into the `output` buffer.
     /// Returns the actual number of bytes written.
     #[inline]
-    pub fn decode_into<T: AsRef<[u8]>>(
-        &self,
-        input: T,
-        output: &mut [u8],
-    ) -> Result<usize, Error> {
+    pub fn decode_into<T: AsRef<[u8]>>(&self, input: T, output: &mut [u8]) -> Result<usize, Error> {
         let input = input.as_ref();
-        if input.is_empty() { return Ok(0); }
-        if input.len() > 512 { return  Err(Error::InputTooBig); }
+        if input.is_empty() {
+            return Ok(0);
+        }
+        if input.len() > 1024 {
+            return Err(Error::InputTooBig);
+        }
 
         // While decoding implies shrinking, we must ensure buffer is enough for the worst case.
         // However, standard usage usually provides a buffer size == input size or calculated decoded_len.
         // The safest check is:
         let req_len = self.decoded_len(input.len());
-        if output.len() < req_len { return Err(Error::BufferTooSmall); }
+        if output.len() < req_len {
+            return Err(Error::BufferTooSmall);
+        }
 
         // SAFETY:
         // 1. `decode_slice_unsafe` performs bounds checks internally or logic ensures it.
         // 2. We pass the slice `output` via mutable reference, guaranteeing validity.
-        unsafe { 
-            decode_slice_unsafe(
-                input,
-                output,
-                &self.config,
-            ) 
-        }
+        unsafe { decode_slice_unsafe(input, output, &self.config) }
     }
 
     // ========================================================================
@@ -317,23 +322,31 @@ impl Engine {
     #[cfg(feature = "std")]
     pub fn encode<T: AsRef<[u8]>>(&self, input: T) -> Result<String, Error> {
         let input = input.as_ref();
-        if input.is_empty() { return Ok(String::new()); }
-        if input.len() > 512 { return  Err(Error::InputTooBig); }
+        if input.is_empty() {
+            return Ok(String::new());
+        }
+        if input.len() > 1024 {
+            return Err(Error::InputTooBig);
+        }
 
         let max_len = self.encoded_len(input.len());
         let mut out = Vec::with_capacity(max_len);
 
-        // SAFETY: 
+        // SAFETY:
         // We set the length to `max_len` to allow the unsafe kernel to write into the uninitialized capacity.
         // We MUST successfully overwrite or truncate this before returning.
         #[allow(clippy::uninit_vec)]
-        unsafe { out.set_len(max_len); }
+        unsafe {
+            out.set_len(max_len);
+        }
 
         match self.encode_into(input, &mut out) {
             Ok(actual_len) => {
                 // SAFETY: The kernel reported `actual_len` bytes were written.
                 // Truncate the vector to remove the remaining uninitialized tail.
-                unsafe { out.set_len(actual_len); }
+                unsafe {
+                    out.set_len(actual_len);
+                }
 
                 // SAFETY: Base58 is always valid ASCII, which is valid UTF-8.
                 unsafe { Ok(String::from_utf8_unchecked(out)) }
@@ -342,7 +355,9 @@ impl Engine {
                 // This branch should technically be unreachable if `encoded_len` is correct
                 // and `Vec::with_capacity` succeeded.
                 // Prevent returning uninitialized memory if logic fails.
-                unsafe { out.set_len(0); }
+                unsafe {
+                    out.set_len(0);
+                }
                 panic!("Base58 encoding failed due to insufficient buffer (logic error).");
             }
         }
@@ -354,54 +369,72 @@ impl Engine {
     #[cfg(feature = "std")]
     pub fn decode<T: AsRef<[u8]>>(&self, input: T) -> Result<Vec<u8>, Error> {
         let input = input.as_ref();
-        if input.is_empty() { return Ok(Vec::new()); }
-        if input.len() > 512 { return  Err(Error::InputTooBig); }
+        if input.is_empty() {
+            return Ok(Vec::new());
+        }
+        if input.len() > 1024 {
+            return Err(Error::InputTooBig);
+        }
 
         let max_len = self.decoded_len(input.len());
         let mut out = Vec::with_capacity(max_len);
 
         // SAFETY: Expose uninitialized buffer to the decoder.
         #[allow(clippy::uninit_vec)]
-        unsafe { out.set_len(max_len); }
+        unsafe {
+            out.set_len(max_len);
+        }
 
         match self.decode_into(input, &mut out) {
             Ok(actual_len) => {
                 // SAFETY: Success. Truncate to actual size.
-                unsafe { out.set_len(actual_len); }
+                unsafe {
+                    out.set_len(actual_len);
+                }
                 Ok(out)
             }
             Err(e) => {
                 // SAFETY: Failure. Clear length to prevent access to junk data.
-                unsafe { out.set_len(0); }
+                unsafe {
+                    out.set_len(0);
+                }
                 Err(e)
             }
         }
     }
 }
 
-// #[cfg(kani)]
-// mod kani_verification {
-//     use super::*;
+#[cfg(all(test, miri))]
+mod lib_miri_coverage {
+    use super::*;
 
-//     const INPUT_LEN: usize = 5;
+    #[test]
+    fn miri_engine_lifecycle() {
+        let alphabet = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+        let engine = Engine::new(alphabet).unwrap();
 
-//     #[kani::proof]
-//     fn check_roundtrip_safety() {
-//         // Symbolic Input
-//         let input: [u8; INPUT_LEN] = kani::any();
+        let data = b"Miri Test Data";
+        let encoded = engine.encode(data).unwrap();
+        let decoded = engine.decode(&encoded).unwrap();
 
-//         let encoded = BITCOIN.encode(&input).unwrap();
-//         let decoded = BITCOIN.decode(encoded).unwrap();
+        assert_eq!(data, decoded.as_slice());
+    }
 
-//         assert_eq!(decoded, &input, "AVX2 Roundtrip Failed");
-//     }
+    #[test]
+    fn miri_all_predefined_engines() {
+        let engines = [BITCOIN, MONERO, RIPPLE, FLICKR];
+        let data = b"test";
+        for engine in engines {
+            let encoded = engine.encode(data).unwrap();
+            let decoded = engine.decode(&encoded).unwrap();
+            assert_eq!(data, decoded.as_slice());
+        }
+    }
 
-//     // #[kani::proof]
-//     // fn check_decoder_robustness() {
-//     //     // Symbolic Input (Random Garbage)
-//     //     let input: [u8; INPUT_LEN] = kani::any();
-
-//     //     // We verify what function NEVER panics/crashes
-//     //     let _ = BITCOIN.decode(input);
-//     // }
-// }
+    #[test]
+    fn miri_config_errors() {
+        let alphabet = [b'a'; 58];
+        // Duplicate chars should fail
+        assert!(Config::new(&alphabet).is_err());
+    }
+}

@@ -167,8 +167,8 @@ fn test_error_buffer_too_small_decode() {
 
 #[test]
 fn test_error_input_too_big_explicit() {
-    // The library limits encoded string input to 512 bytes.
-    let big_string = "1".repeat(513);
+    // The library limits encoded string input to 1024 bytes.
+    let big_string = "1".repeat(1025);
     let err_dec = BITCOIN.decode(&big_string).unwrap_err();
     assert_eq!(err_dec, Error::InputTooBig);
 }
@@ -197,8 +197,8 @@ fn test_roundtrip_random_data() {
         (*seed >> 56) as u8
     }
 
-    // Limit binary input to ~373 bytes to ensure encoded string stays <= 512.
-    let lengths = (0..100).chain((100..373).step_by(13));
+    // Limit binary input to ~740 bytes to ensure encoded string stays <= 1024.
+    let lengths = (0..100).chain((100..740).step_by(13));
 
     for len in lengths {
         let mut input = Vec::with_capacity(len);
@@ -226,8 +226,8 @@ fn test_vs_bs58_crate_bitcoin() {
         (*seed >> 56) as u8
     }
 
-    // Range 0..373 (Safe limit for base58-turbo buffer)
-    for len in (0..373).step_by(7) {
+    // Range 0..740 (Safe limit for base58-turbo buffer)
+    for len in (0..740).step_by(7) {
         let mut input = Vec::with_capacity(len);
         for _ in 0..len {
             input.push(next_byte(&mut seed));
@@ -261,7 +261,7 @@ fn test_vs_bs58_crate_ripple() {
         (*seed >> 56) as u8
     }
 
-    for len in (0..373).step_by(9) {
+    for len in (0..740).step_by(9) {
         let mut input = Vec::with_capacity(len);
         for _ in 0..len {
             input.push(next_byte(&mut seed));
@@ -280,4 +280,99 @@ fn test_vs_bs58_crate_ripple() {
         let decoded_bytes = RIPPLE.decode(&expected_str).expect("Turbo decode failed");
         assert_eq!(decoded_bytes, input, "Ripple decoding mismatch at len {}", len);
     }
+}
+
+#[test]
+fn test_monero_engine() {
+    let input = b"Hello World";
+    let encoded = base58_turbo::MONERO.encode(input).unwrap();
+    let decoded = base58_turbo::MONERO.decode(&encoded).unwrap();
+    assert_eq!(decoded, input);
+}
+
+#[test]
+fn test_error_display() {
+    assert_eq!(format!("{}", Error::InvalidCharacter), "invalid character in base58 string");
+    assert_eq!(format!("{}", Error::BufferTooSmall), "output buffer too small");
+    assert_eq!(format!("{}", Error::InputTooBig), "input data too big (max 1024 bytes)");
+    assert_eq!(format!("{}", Error::WrongAlphabet), "input alphabet has duplicate chars");
+}
+
+#[test]
+fn test_empty_input() {
+    assert_eq!(BITCOIN.encode(b"").unwrap(), "");
+    assert_eq!(BITCOIN.decode("").unwrap(), b"");
+    
+    let mut out = [0u8; 10];
+    assert_eq!(BITCOIN.encode_into(b"", &mut out).unwrap(), 0);
+    assert_eq!(BITCOIN.decode_into("", &mut out).unwrap(), 0);
+}
+
+#[test]
+fn test_input_too_big_encode() {
+    let input = [0u8; 1025];
+    assert_eq!(BITCOIN.encode(&input).unwrap_err(), Error::InputTooBig);
+    
+    let mut out = [0u8; 2048];
+    assert_eq!(BITCOIN.encode_into(&input, &mut out).unwrap_err(), Error::InputTooBig);
+}
+
+#[test]
+fn test_decode_buffer_too_small_edge_cases() {
+    // Case 1: leading zeros buffer too small
+    let input = "111"; // 3 leading zeros
+    let mut out = [0u8; 2];
+    assert_eq!(BITCOIN.decode_into(input, &mut out).unwrap_err(), Error::BufferTooSmall);
+
+    // Case 2: payload too big for remaining buffer
+    let input = "112"; // 2 leading zeros + '2' (decoded to 0x01)
+    let mut out = [0u8; 2]; 
+    // decoded_len for "112" is 3. output.len() is 2.
+    assert_eq!(BITCOIN.decode_into(input, &mut out).unwrap_err(), Error::BufferTooSmall);
+}
+
+#[test]
+fn test_decode_normalization_and_memmove() {
+    // We need an input that decodes to something where out_idx > 0 after emission phase
+    // but before normalization.
+    // The emission phase writes in blocks of 8 bytes (u64).
+    // If the decoded value is small, it will have leading zeros in the bignum.
+    let input = "2"; // Decodes to 0x01
+    let mut out = [0u8; 10];
+    let len = BITCOIN.decode_into(input, &mut out).unwrap();
+    assert_eq!(len, 1);
+    assert_eq!(out[0], 0x01);
+}
+
+#[test]
+fn test_encode_vectorized_zeros_only() {
+    let input = [0u8; 16];
+    let encoded = BITCOIN.encode(&input).unwrap();
+    assert_eq!(encoded, "1".repeat(16));
+}
+
+#[test]
+fn test_decode_invalid_char_in_chunk() {
+    // "2222222222" is a 10-char chunk.
+    // Replacing one with '0' (invalid)
+    let input = "2222022222";
+    assert_eq!(BITCOIN.decode(input).unwrap_err(), Error::InvalidCharacter);
+}
+
+#[test]
+fn test_decode_large_payload_buffer_too_small() {
+    // Payload that is larger than the provided buffer during emission
+    // "JxF12TrwUP45BMd" is "Hello World" (11 bytes)
+    let input = "JxF12TrwUP45BMd";
+    let mut out = [0u8; 5];
+    // Note: decoded_len returns input.len() which is 15.
+    // So decode_into will fail early because 15 > 5.
+    assert_eq!(BITCOIN.decode_into(input, &mut out).unwrap_err(), Error::BufferTooSmall);
+}
+
+#[test]
+fn test_config_new_alphabet_uniqueness() {
+    let mut alphabet = *b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+    alphabet[57] = alphabet[0]; // Duplicate
+    assert_eq!(base58_turbo::Config::new(&alphabet).unwrap_err(), Error::WrongAlphabet);
 }

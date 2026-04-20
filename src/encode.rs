@@ -24,7 +24,7 @@ const fn generate_weights<const INPUTS: usize, const OUTPUTS: usize>() -> [[u32;
     let mut i = 0;
     while i < INPUTS {
         let row_idx = INPUTS - 1 - i;
-        
+
         // Copy current power (val) to table row
         let mut k = 0;
         while k < OUTPUTS {
@@ -33,7 +33,7 @@ const fn generate_weights<const INPUTS: usize, const OUTPUTS: usize>() -> [[u32;
         }
 
         // The inner conversion loop
-        let mut temp_val = val; 
+        let mut temp_val = val;
         let mut col_idx = OUTPUTS;
         while col_idx > 0 {
             col_idx -= 1;
@@ -112,14 +112,18 @@ unsafe fn emit_full_block(config: &Config, mut val: u64, out_ptr: &mut *mut u8) 
     unsafe {
         // Write backwards using 2-byte lookup table
         *out_ptr = out_ptr.sub(2);
-        (*out_ptr as *mut u16).write_unaligned(config.lut_58_squared.get_unchecked(rem1 % 3364).to_be());
+        (*out_ptr as *mut u16)
+            .write_unaligned(config.lut_58_squared.get_unchecked(rem1 % 3364).to_be());
         *out_ptr = out_ptr.sub(2);
-        (*out_ptr as *mut u16).write_unaligned(config.lut_58_squared.get_unchecked(rem1 / 3364).to_be());
+        (*out_ptr as *mut u16)
+            .write_unaligned(config.lut_58_squared.get_unchecked(rem1 / 3364).to_be());
 
         *out_ptr = out_ptr.sub(2);
-        (*out_ptr as *mut u16).write_unaligned(config.lut_58_squared.get_unchecked(rem2 % 3364).to_be());
+        (*out_ptr as *mut u16)
+            .write_unaligned(config.lut_58_squared.get_unchecked(rem2 % 3364).to_be());
         *out_ptr = out_ptr.sub(2);
-        (*out_ptr as *mut u16).write_unaligned(config.lut_58_squared.get_unchecked(rem2 / 3364).to_be());
+        (*out_ptr as *mut u16)
+            .write_unaligned(config.lut_58_squared.get_unchecked(rem2 / 3364).to_be());
 
         *out_ptr = out_ptr.sub(2);
         (*out_ptr as *mut u16).write_unaligned(config.lut_58_squared.get_unchecked(rem3).to_be());
@@ -143,7 +147,8 @@ unsafe fn emit_partial_block(config: &Config, mut val: u64, len: usize, mut out_
             out_ptr = out_ptr.sub(2);
             (out_ptr as *mut u16).write_unaligned(config.lut_58_squared.get_unchecked(low).to_be());
             out_ptr = out_ptr.sub(2);
-            (out_ptr as *mut u16).write_unaligned(config.lut_58_squared.get_unchecked(high).to_be());
+            (out_ptr as *mut u16)
+                .write_unaligned(config.lut_58_squared.get_unchecked(high).to_be());
         }
         loops -= 4;
     }
@@ -161,14 +166,21 @@ unsafe fn emit_partial_block(config: &Config, mut val: u64, len: usize, mut out_
 
 /// Orchestrates the writing of the bignum digits to the output buffer.
 #[inline(always)]
-unsafe fn write_digits_to_string(config: &Config, digits: &[u64], count: usize, dst_end: *mut u8) -> *mut u8 {
+unsafe fn write_digits_to_string(
+    config: &Config,
+    digits: &[u64],
+    count: usize,
+    dst_end: *mut u8,
+) -> *mut u8 {
     // 1. Determine length of the most significant digit
     let mut last_val = *unsafe { digits.get_unchecked(count - 1) };
     let mut last_chunk_len = 0;
     loop {
         last_chunk_len += 1;
         last_val /= 58;
-        if last_val == 0 { break; }
+        if last_val == 0 {
+            break;
+        }
     }
 
     // 2. Set pointers
@@ -182,7 +194,14 @@ unsafe fn write_digits_to_string(config: &Config, digits: &[u64], count: usize, 
     }
 
     // 4. Emit MSB
-    unsafe { emit_partial_block(config, *digits.get_unchecked(count - 1), last_chunk_len, out_ptr) };
+    unsafe {
+        emit_partial_block(
+            config,
+            *digits.get_unchecked(count - 1),
+            last_chunk_len,
+            out_ptr,
+        )
+    };
 
     final_start_ptr
 }
@@ -230,7 +249,7 @@ unsafe fn process_fixed_25(src: *const u8, out: &mut [u64]) -> usize {
     out[0] = reduced[6] * RADIX_58_5 + reduced[7];
     out[1] = reduced[4] * RADIX_58_5 + reduced[5];
     out[2] = reduced[2] * RADIX_58_5 + reduced[3];
-    out[3] = reduced[0] * RADIX_58_5 + reduced[1]; 
+    out[3] = reduced[0] * RADIX_58_5 + reduced[1];
 
     4
 }
@@ -348,8 +367,8 @@ unsafe fn process_fixed_69(src: *const u8, out_digits: &mut [u64]) -> usize {
         let body_ptr = src.add(1);
         for i in 0..8 {
             let v = load_be_u64(body_ptr.add(i * 8));
-            input[1 + i*2] = (v >> 32) as u32;
-            input[2 + i*2] = v as u32;
+            input[1 + i * 2] = (v >> 32) as u32;
+            input[2 + i * 2] = v as u32;
         }
         input[17] = load_be_u32(src.add(65));
     }
@@ -408,7 +427,9 @@ unsafe fn process_general(mut src: *const u8, mut len: usize, out_digits: &mut [
     // Bypass zero-initialization to avoid memset overhead.
     let mut digits_5_uninit = core::mem::MaybeUninit::<[u32; 300]>::uninit();
     let digits_5_ptr = digits_5_uninit.as_mut_ptr() as *mut u32;
-    unsafe { *digits_5_ptr = 0; }
+    unsafe {
+        *digits_5_ptr = 0;
+    }
     let digits_5 = unsafe { &mut *digits_5_uninit.as_mut_ptr() };
     let mut count_5 = 1;
 
@@ -420,7 +441,7 @@ unsafe fn process_general(mut src: *const u8, mut len: usize, out_digits: &mut [
         // --- 64-Byte Initialization ---
         let mut input = [0u32; 16];
         let s_u64 = src as *const u64;
-        
+
         for i in 0..8 {
             let v = unsafe { (s_u64.add(i)).read_unaligned().to_be() };
             input[i * 2] = (v >> 32) as u32;
@@ -435,44 +456,60 @@ unsafe fn process_general(mut src: *const u8, mut len: usize, out_digits: &mut [
         // Batch 1
         for i in 0..8 {
             let val = input[i] as u64;
-            for k in 0..18 { acc[k + 1] += val * (TABLE_64[i][k] as u64); }
+            for k in 0..18 {
+                acc[k + 1] += val * (TABLE_64[i][k] as u64);
+            }
         }
         for k in (1..19).rev() {
-            let val = acc[k] + carry; acc[k] = val % RADIX_58_5; carry = val / RADIX_58_5;
+            let val = acc[k] + carry;
+            acc[k] = val % RADIX_58_5;
+            carry = val / RADIX_58_5;
         }
-        acc[0] += carry; carry = 0;
+        acc[0] += carry;
+        carry = 0;
 
         // Batch 2
         for i in 8..16 {
             let val = input[i] as u64;
-            for k in 0..18 { acc[k + 1] += val * (TABLE_64[i][k] as u64); }
+            for k in 0..18 {
+                acc[k + 1] += val * (TABLE_64[i][k] as u64);
+            }
         }
         for k in (1..19).rev() {
-            let val = acc[k] + carry; acc[k] = val % RADIX_58_5; carry = val / RADIX_58_5;
+            let val = acc[k] + carry;
+            acc[k] = val % RADIX_58_5;
+            carry = val / RADIX_58_5;
         }
         acc[0] += carry;
 
         // Store to state (Little Endian)
-        for k in 0..19 { digits_5[18 - k] = acc[k] as u32; }
+        for k in 0..19 {
+            digits_5[18 - k] = acc[k] as u32;
+        }
         count_5 = if digits_5[18] == 0 { 18 } else { 19 };
 
         src = unsafe { src.add(64) };
         len -= 64;
-
     } else if len >= 32 {
         // --- 32-Byte Initialization (unchanged) ---
         let mut input = [0u32; 8];
-        for i in 0..8 { input[i] = unsafe { load_be_u32(src.add(i*4)) }; }
+        for i in 0..8 {
+            input[i] = unsafe { load_be_u32(src.add(i * 4)) };
+        }
 
         let mut acc = [0u64; 9];
         for i in 0..8 {
             let val = input[i] as u64;
-            for k in 0..8 { acc[k + 1] += val * (TABLE_32[i][k] as u64); }
+            for k in 0..8 {
+                acc[k + 1] += val * (TABLE_32[i][k] as u64);
+            }
         }
 
         let mut carry = 0u64;
         for k in (1..9).rev() {
-            let val = acc[k] + carry; digits_5[8 - k] = (val % RADIX_58_5) as u32; carry = val / RADIX_58_5;
+            let val = acc[k] + carry;
+            digits_5[8 - k] = (val % RADIX_58_5) as u32;
+            carry = val / RADIX_58_5;
         }
         let val = acc[0] + carry;
         digits_5[8] = (val % RADIX_58_5) as u32;
@@ -491,7 +528,7 @@ unsafe fn process_general(mut src: *const u8, mut len: usize, out_digits: &mut [
         // Process 4-byte chunks
         while len >= 4 {
             let chunk = load_be_u32(src);
-            
+
             // Bignum: digits_5 = digits_5 * (2^32) + chunk
             let mut carry = chunk as u64;
             let mut i = 0;
@@ -506,7 +543,7 @@ unsafe fn process_general(mut src: *const u8, mut len: usize, out_digits: &mut [
                 carry /= RADIX_58_5;
                 count_5 += 1;
             }
-            
+
             src = src.add(4);
             len -= 4;
         }
@@ -543,7 +580,11 @@ unsafe fn process_general(mut src: *const u8, mut len: usize, out_digits: &mut [
         let mut i = 0;
         while i < count_5 {
             let low = *digits_5.get_unchecked(i) as u64;
-            let high = if i + 1 < count_5 { *digits_5.get_unchecked(i + 1) as u64 } else { 0 };
+            let high = if i + 1 < count_5 {
+                *digits_5.get_unchecked(i + 1) as u64
+            } else {
+                0
+            };
 
             *out_digits.get_unchecked_mut(out_count) = high * RADIX_58_5 + low;
             out_count += 1;
@@ -560,8 +601,8 @@ unsafe fn process_general(mut src: *const u8, mut len: usize, out_digits: &mut [
 
 #[inline(always)]
 pub unsafe fn encode_slice_unsafe(input: &[u8], mut dst: *mut u8, config: &Config) -> usize {
-    // Hard limit of 512 bytes.
-    assert!(input.len() <= 512, "Input too big! {}", input.len());
+    // Hard limit of 1024 bytes.
+    assert!(input.len() <= 1024, "Input too big! {}", input.len());
 
     let mut len = input.len();
     let mut src = input.as_ptr();
@@ -569,7 +610,7 @@ pub unsafe fn encode_slice_unsafe(input: &[u8], mut dst: *mut u8, config: &Confi
 
     // Fetch the specific zero character for this alphabet (e.g. '1' for Bitcoin, 'r' for Ripple)
     let z_char = *unsafe { config.alphabet.get_unchecked(0) };
-    
+
     // Create a 8-byte pattern of the zero char for vectorized writing
     // e.g. if z_char is '1' (0x31), pattern is 0x3131313131313131
     let z_pattern = 0x0101010101010101 * (z_char as u64);
@@ -600,15 +641,15 @@ pub unsafe fn encode_slice_unsafe(input: &[u8], mut dst: *mut u8, config: &Confi
 
     // 2. Dispatch to Kernel
     // Bypass zero-initialization to avoid memset overhead.
-    let mut radix_digits_uninit = core::mem::MaybeUninit::<[u64; 128]>::uninit();
+    let mut radix_digits_uninit = core::mem::MaybeUninit::<[u64; 160]>::uninit();
     let radix_digits = unsafe { &mut *radix_digits_uninit.as_mut_ptr() };
-    
+
     let count = match len {
         25 => unsafe { process_fixed_25(src, radix_digits) },
         32 => unsafe { process_fixed_32(src, radix_digits) },
         64 => unsafe { process_fixed_64(src, radix_digits) },
         69 => unsafe { process_fixed_69(src, radix_digits) },
-        _  => unsafe { process_general(src, len, radix_digits) },
+        _ => unsafe { process_general(src, len, radix_digits) },
     };
 
     // 3. Emit String
@@ -660,17 +701,18 @@ mod base58_miri_coverage {
     #[test]
     fn miri_base58_encode_fixed_kernels() {
         // Substitute `Config::default()` with your actual constructor if needed
-        let config = Config::new(b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz").unwrap(); 
+        let config =
+            Config::new(b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz").unwrap();
 
         // Hits `process_fixed_25`
         verify_encode(&config, 25);
-        
+
         // Hits `process_fixed_32`
         verify_encode(&config, 32);
-        
+
         // Hits `process_fixed_64`
         verify_encode(&config, 64);
-        
+
         // Hits `process_fixed_69`
         verify_encode(&config, 69);
     }
@@ -681,12 +723,13 @@ mod base58_miri_coverage {
 
     #[test]
     fn miri_base58_encode_general_kernel() {
-        let config = Config::new(b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz").unwrap();
+        let config =
+            Config::new(b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz").unwrap();
 
         // Case: < 32 bytes (No jump start, hits 4-byte chunks and tail logic)
-        verify_encode(&config, 3);   // Tail only
-        verify_encode(&config, 4);   // Exactly one 4-byte chunk
-        verify_encode(&config, 15);  // Multiple 4-byte chunks + tail
+        verify_encode(&config, 3); // Tail only
+        verify_encode(&config, 4); // Exactly one 4-byte chunk
+        verify_encode(&config, 15); // Multiple 4-byte chunks + tail
 
         // Case: >= 32 bytes, < 64 bytes (Hits 32-byte jump start)
         verify_encode(&config, 33);
@@ -695,9 +738,9 @@ mod base58_miri_coverage {
         // Case: >= 64 bytes (Hits 64-byte jump start)
         verify_encode(&config, 65);
         verify_encode(&config, 100);
-        
+
         // Case: Large payload up to limit
-        verify_encode(&config, 512); 
+        verify_encode(&config, 1024);
     }
 
     // ----------------------------------------------------------------------
@@ -706,23 +749,24 @@ mod base58_miri_coverage {
 
     #[test]
     fn miri_base58_encode_leading_zeros() {
-        let config = Config::new(b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz").unwrap();
+        let config =
+            Config::new(b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz").unwrap();
 
         // Single zero (Hits `while len > 0 && *src == 0`)
         verify_exact(&config, &[0]);
-        
+
         // Few zeros (Hits single-byte zero loop)
         verify_exact(&config, &[0, 0, 0]);
-        
+
         // Exactly 8 zeros (Hits the `u64` vectorized zero pattern check)
         verify_exact(&config, &[0, 0, 0, 0, 0, 0, 0, 0]);
-        
+
         // More than 8 zeros (Hits vectorized loop + remainder loop)
         verify_exact(&config, &[0; 10]);
-        
+
         // Entirely zeros matching a fixed kernel size (Ensures it bails early via `if len == 0`)
         verify_exact(&config, &[0; 25]);
-        
+
         // Vectorized zeros followed by data (Hits break condition in vectorized loop)
         verify_exact(&config, &[0, 0, 0, 0, 0, 0, 0, 0, 255]);
     }
@@ -734,14 +778,15 @@ mod base58_miri_coverage {
     #[test]
     #[should_panic(expected = "Input too big!")]
     fn miri_base58_encode_panic_on_too_large() {
-        let config = Config::new(b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz").unwrap();
-        
-        // Hard limit in code is 512 bytes
-        let input = vec![0u8; 513];
-        let mut dst = vec![0u8; 1000];
-        
-        unsafe { 
-            encode_slice_unsafe(&input, dst.as_mut_ptr(), &config); 
+        let config =
+            Config::new(b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz").unwrap();
+ 
+        // Hard limit in code is 1024 bytes
+        let input = vec![0u8; 1025];
+        let mut dst = vec![0u8; 2000];
+ 
+        unsafe {
+            encode_slice_unsafe(&input, dst.as_mut_ptr(), &config);
         }
     }
 }
@@ -757,14 +802,14 @@ mod base58_miri_coverage {
 //     // -----------------------------------------------------------------
 
 //     /// Creates a valid Config struct but with dummy values.
-//     /// 
+//     ///
 //     /// Why this optimizes verification:
 //     /// The solver doesn't need to calculate the exact Base58 characters.
 //     /// It only needs to know that `lut_58_squared` has valid memory addresses.
 //     /// Whether we write 'A' or '\0' to the buffer doesn't change Memory Safety.
 //     fn get_safety_config() -> Config {
 //         Config {
-//             alphabet: [0u8; 58], 
+//             alphabet: [0u8; 58],
 //             lut_58_squared: [0u16; 3364],
 //             decode_map: [0u8; 256],
 //         }
@@ -774,11 +819,11 @@ mod base58_miri_coverage {
 //     /// It allocates a sufficiently large buffer and calls the unsafe function.
 //     unsafe fn run_safety_check(input: &[u8]) {
 //         let config = get_safety_config();
-        
+
 //         // Allocate an output buffer.
 //         // Base58 expansion factor is ~1.37.
 //         // For our largest test (69 bytes), we need ~95 bytes.
-//         // We give 256 to be absolutely sure buffer size isn't the constraint 
+//         // We give 256 to be absolutely sure buffer size isn't the constraint
 //         // (unless checking buffer overrun logic specifically).
 //         let mut output_buf = [0u8; 256];
 
@@ -828,7 +873,7 @@ mod base58_miri_coverage {
 //     /// Verify 69-byte Kernel
 //     /// Checks `process_fixed_69` (complex batching).
 //     #[kani::proof]
-//     #[kani::unwind(22)] 
+//     #[kani::unwind(22)]
 //     fn safety_fixed_69() {
 //         let input: [u8; 69] = kani::any();
 //         unsafe { run_safety_check(&input) };

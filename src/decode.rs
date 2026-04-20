@@ -85,11 +85,13 @@ unsafe fn parse_chunk(config: &Config, src: &[u8]) -> Result<(u64, u64), Error> 
 unsafe fn decode_payload(config: &Config, mut src: &[u8], dst: &mut [u8]) -> Result<usize, Error> {
     // 1. Accumulation Phase
     // Use a stack-allocated buffer for the bignum (Little Endian u64s).
-    // 128 u64s = 1024 bytes, sufficient for very large inputs.
+    // 160 u64s = 1280 bytes, sufficient for very large inputs.
     // Bypass zero-initialization to avoid memset overhead.
-    let mut bignum_uninit = core::mem::MaybeUninit::<[u64; 128]>::uninit();
+    let mut bignum_uninit = core::mem::MaybeUninit::<[u64; 160]>::uninit();
     let bignum_ptr = bignum_uninit.as_mut_ptr() as *mut u64;
-    unsafe { *bignum_ptr = 0; }
+    unsafe {
+        *bignum_ptr = 0;
+    }
     let bignum = unsafe { &mut *bignum_uninit.as_mut_ptr() };
     let mut count = 1;
 
@@ -97,16 +99,56 @@ unsafe fn decode_payload(config: &Config, mut src: &[u8], dst: &mut [u8]) -> Res
     // This reduces the bignum loop overhead by 10x.
     while src.len() >= 10 {
         // Unroll parsing for the fixed chunk size
-        let d0 = *unsafe { config.decode_map.get_unchecked(*src.get_unchecked(0) as usize) } as u64;
-        let d1 = *unsafe { config.decode_map.get_unchecked(*src.get_unchecked(1) as usize) } as u64;
-        let d2 = *unsafe { config.decode_map.get_unchecked(*src.get_unchecked(2) as usize) } as u64;
-        let d3 = *unsafe { config.decode_map.get_unchecked(*src.get_unchecked(3) as usize) } as u64;
-        let d4 = *unsafe { config.decode_map.get_unchecked(*src.get_unchecked(4) as usize) } as u64;
-        let d5 = *unsafe { config.decode_map.get_unchecked(*src.get_unchecked(5) as usize) } as u64;
-        let d6 = *unsafe { config.decode_map.get_unchecked(*src.get_unchecked(6) as usize) } as u64;
-        let d7 = *unsafe { config.decode_map.get_unchecked(*src.get_unchecked(7) as usize) } as u64;
-        let d8 = *unsafe { config.decode_map.get_unchecked(*src.get_unchecked(8) as usize) } as u64;
-        let d9 = *unsafe { config.decode_map.get_unchecked(*src.get_unchecked(9) as usize) } as u64;
+        let d0 = *unsafe {
+            config
+                .decode_map
+                .get_unchecked(*src.get_unchecked(0) as usize)
+        } as u64;
+        let d1 = *unsafe {
+            config
+                .decode_map
+                .get_unchecked(*src.get_unchecked(1) as usize)
+        } as u64;
+        let d2 = *unsafe {
+            config
+                .decode_map
+                .get_unchecked(*src.get_unchecked(2) as usize)
+        } as u64;
+        let d3 = *unsafe {
+            config
+                .decode_map
+                .get_unchecked(*src.get_unchecked(3) as usize)
+        } as u64;
+        let d4 = *unsafe {
+            config
+                .decode_map
+                .get_unchecked(*src.get_unchecked(4) as usize)
+        } as u64;
+        let d5 = *unsafe {
+            config
+                .decode_map
+                .get_unchecked(*src.get_unchecked(5) as usize)
+        } as u64;
+        let d6 = *unsafe {
+            config
+                .decode_map
+                .get_unchecked(*src.get_unchecked(6) as usize)
+        } as u64;
+        let d7 = *unsafe {
+            config
+                .decode_map
+                .get_unchecked(*src.get_unchecked(7) as usize)
+        } as u64;
+        let d8 = *unsafe {
+            config
+                .decode_map
+                .get_unchecked(*src.get_unchecked(8) as usize)
+        } as u64;
+        let d9 = *unsafe {
+            config
+                .decode_map
+                .get_unchecked(*src.get_unchecked(9) as usize)
+        } as u64;
 
         let invalid = (d0 | d1 | d2 | d3 | d4 | d5 | d6 | d7 | d8 | d9) & 0x80;
         if invalid != 0 {
@@ -187,8 +229,8 @@ pub unsafe fn decode_slice_unsafe(
     dst: &mut [u8],
     config: &Config,
 ) -> Result<usize, Error> {
-    // Hard limit of 512 bytes.
-    assert!(input.len() <= 512, "Input too big! {}", input.len());
+    // Hard limit of 1024 bytes.
+    assert!(input.len() <= 1024, "Input too big! {}", input.len());
 
     // 1. Handle Leading Zeros
     let zero_char = *unsafe { config.alphabet.get_unchecked(0) };
@@ -217,4 +259,93 @@ pub unsafe fn decode_slice_unsafe(
     let written_payload = unsafe { decode_payload(config, src, &mut dst[leading_zeros..]) }?;
 
     Ok(leading_zeros + written_payload)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::BITCOIN;
+
+    #[test]
+    fn test_bignum_mul_add_carry() {
+        let mut digits = [0u64; 10];
+        let mut count = 1;
+        // (0 * 58) + 1 = 1
+        unsafe { bignum_mul_add(&mut digits, &mut count, 58, 1) };
+        assert_eq!(count, 1);
+        assert_eq!(digits[0], 1);
+
+        // (u64::MAX * 2) + 1 => carry
+        digits[0] = u64::MAX;
+        count = 1;
+        unsafe { bignum_mul_add(&mut digits, &mut count, 2, 1) };
+        assert_eq!(count, 2);
+        // (2^64-1)*2 + 1 = 2^65 - 2 + 1 = 2^65 - 1.
+        // Low 64 bits: all ones (u64::MAX).
+        // High 64 bits: 1.
+        assert_eq!(digits[0], u64::MAX);
+        assert_eq!(digits[1], 1);
+    }
+
+    #[test]
+    fn test_parse_chunk_invalid() {
+        let config = BITCOIN.config();
+        let res = unsafe { parse_chunk(config, b"10") }; // '0' is invalid
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_decode_payload_buffer_too_small() {
+        let config = BITCOIN.config();
+        let mut dst = [0u8; 1];
+        // "222" -> 58*59 + 1 = 3423. Needs 2 bytes.
+        let res = unsafe { decode_payload(config, b"222", &mut dst) };
+        assert_eq!(res.unwrap_err(), Error::BufferTooSmall);
+    }
+}
+
+#[cfg(all(test, miri))]
+mod base58_miri_coverage {
+    use super::*;
+    use crate::BITCOIN;
+    use rand::{RngExt, rng};
+
+    fn random_bytes(len: usize) -> Vec<u8> {
+        let mut rng = rng();
+        (0..len).map(|_| rng.random()).collect()
+    }
+
+    #[test]
+    fn miri_base58_decode_fuzz() {
+        // Test different lengths under MIRI to ensure no out-of-bounds or UB.
+        let lengths = [0, 1, 3, 10, 31, 32, 33, 63, 64, 65, 100, 512, 700];
+        for &len in &lengths {
+            let input_bytes = random_bytes(len);
+            // Encode the random bytes
+            let encoded_str = BITCOIN.encode(&input_bytes).unwrap();
+            let encoded_bytes = encoded_str.as_bytes();
+
+            // Decode back into a buffer
+            let mut decoded_buf = vec![0u8; len];
+            let decoded_len =
+                unsafe { decode_slice_unsafe(encoded_bytes, &mut decoded_buf, BITCOIN.config()) }
+                    .unwrap();
+            assert_eq!(decoded_len, len);
+            assert_eq!(&decoded_buf[..decoded_len], &input_bytes[..]);
+        }
+    }
+
+    #[test]
+    fn miri_base58_decode_leading_zeros() {
+        // Test decoding with leading zeros under MIRI
+        let input = "111222"; // 3 leading zeros, followed by data
+        let mut out = [0u8; 10];
+        let len =
+            unsafe { decode_slice_unsafe(input.as_bytes(), &mut out, BITCOIN.config()) }.unwrap();
+        // '1' decodes to 0x00. '2' decodes to 0x01.
+        // "222" -> 58^2 + 58 + 1 = 3364 + 58 + 1 = 3423 = 0x0D5F
+        // Output should be 0x00, 0x00, 0x00, 0x0D, 0x5F
+        assert_eq!(len, 5);
+        assert_eq!(&out[..5], &[0x00, 0x00, 0x00, 0x0D, 0x5F]);
+    }
 }
