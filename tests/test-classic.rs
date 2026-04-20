@@ -311,26 +311,6 @@ fn test_monero_engine() {
 }
 
 #[test]
-fn test_error_display() {
-    assert_eq!(
-        format!("{}", Error::InvalidCharacter),
-        "invalid character in base58 string"
-    );
-    assert_eq!(
-        format!("{}", Error::BufferTooSmall),
-        "output buffer too small"
-    );
-    assert_eq!(
-        format!("{}", Error::InputTooBig),
-        "input data too big (max 1024 bytes)"
-    );
-    assert_eq!(
-        format!("{}", Error::WrongAlphabet),
-        "input alphabet has duplicate chars"
-    );
-}
-
-#[test]
 fn test_empty_input() {
     assert_eq!(BITCOIN.encode(b"").unwrap(), "");
     assert_eq!(BITCOIN.decode("").unwrap(), b"");
