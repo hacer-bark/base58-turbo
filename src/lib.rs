@@ -77,6 +77,10 @@
 #![warn(unused_qualifications)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
+// Use `serde` when enabled
+#[cfg(feature = "serde")]
+pub mod serde;
+
 mod decode;
 mod encode;
 use decode::decode_slice_unsafe;
@@ -163,6 +167,77 @@ impl Config {
 #[derive(Debug, Clone, Copy)]
 pub struct Engine {
     config: Config,
+}
+
+// 2. Add manual Serde implementations underneath
+#[cfg(feature = "serde")]
+impl ::serde::Serialize for Config {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: ::serde::Serializer,
+    {
+        // The alphabet is guaranteed valid ASCII/UTF-8 by Config::new checks.
+        // Serializing it as a string makes it clean in JSON/TOML.
+        let alpha_str =
+            core::str::from_utf8(&self.alphabet).map_err(::serde::ser::Error::custom)?;
+        serializer.serialize_str(alpha_str)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> ::serde::Deserialize<'de> for Config {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: ::serde::Deserializer<'de>,
+    {
+        struct AlphabetVisitor;
+
+        impl<'de> ::serde::de::Visitor<'de> for AlphabetVisitor {
+            type Value = Config;
+
+            fn expecting(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                formatter.write_str("a 58-character Base58 alphabet string")
+            }
+
+            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+            where
+                E: ::serde::de::Error,
+            {
+                let bytes = v.as_bytes();
+                if bytes.len() != 58 {
+                    return Err(E::custom("expected exactly 58-byte alphabet"));
+                }
+
+                let mut alpha = [0u8; 58];
+                alpha.copy_from_slice(bytes);
+
+                // Re-calculate the LUTs and Maps automatically
+                Config::new(&alpha).map_err(E::custom)
+            }
+        }
+
+        deserializer.deserialize_str(AlphabetVisitor)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl ::serde::Serialize for Engine {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: ::serde::Serializer,
+    {
+        self.config.serialize(serializer)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> ::serde::Deserialize<'de> for Engine {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: ::serde::Deserializer<'de>,
+    {
+        Config::deserialize(deserializer).map(|config| Engine { config })
+    }
 }
 
 // ======================================================================

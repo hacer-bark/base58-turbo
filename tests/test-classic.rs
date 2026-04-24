@@ -403,3 +403,83 @@ fn test_config_new_alphabet_uniqueness() {
         Error::WrongAlphabet
     );
 }
+
+#[test]
+fn test_error_display() {
+    assert_eq!(
+        format!("{}", Error::InvalidCharacter),
+        "invalid character in base58 string"
+    );
+    assert_eq!(
+        format!("{}", Error::BufferTooSmall),
+        "output buffer too small"
+    );
+    assert_eq!(format!("{}", Error::InputTooBig), "input data too big");
+    assert_eq!(
+        format!("{}", Error::WrongAlphabet),
+        "input alphabet has duplicate chars"
+    );
+}
+
+#[test]
+fn test_engine_config_access() {
+    let config = BITCOIN.config();
+    assert_eq!(config.alphabet[0], b'1');
+}
+
+#[test]
+fn test_len_calculators() {
+    assert_eq!(BITCOIN.encoded_len(0), 1);
+    assert_eq!(BITCOIN.decoded_len(0), 0);
+    assert!(BITCOIN.encoded_len(1024) >= 1024);
+    assert_eq!(BITCOIN.decoded_len(2048), 2048);
+}
+
+#[cfg(feature = "serde")]
+#[test]
+fn test_serde_config_engine() {
+    let alpha = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+    let config = base58_turbo::Config::new(alpha).unwrap();
+    let engine = base58_turbo::Engine::new(alpha).unwrap();
+
+    // Serialize Config
+    let conf_json = serde_json::to_string(&config).unwrap();
+    assert_eq!(
+        conf_json,
+        format!("\"{}\"", std::str::from_utf8(alpha).unwrap())
+    );
+
+    // Deserialize Config
+    let de_conf: base58_turbo::Config = serde_json::from_str(&conf_json).unwrap();
+    assert_eq!(de_conf.alphabet, config.alphabet);
+
+    // Serialize Engine
+    let eng_json = serde_json::to_string(&engine).unwrap();
+    assert_eq!(eng_json, conf_json);
+
+    // Deserialize Engine
+    let de_eng: base58_turbo::Engine = serde_json::from_str(&eng_json).unwrap();
+    assert_eq!(de_eng.config().alphabet, engine.config().alphabet);
+
+    // Test Error: wrong length alphabet in serde
+    let res: Result<base58_turbo::Config, _> = serde_json::from_str("\"abc\"");
+    assert!(res.is_err());
+    assert!(
+        res.unwrap_err()
+            .to_string()
+            .contains("expected exactly 58-byte alphabet")
+    );
+
+    // Test Error: duplicate chars in alphabet via serde
+    let mut bad_alpha = *b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+    bad_alpha[57] = bad_alpha[0];
+    let bad_alpha_str = std::str::from_utf8(&bad_alpha).unwrap();
+    let res: Result<base58_turbo::Config, _> =
+        serde_json::from_str(&format!("\"{}\"", bad_alpha_str));
+    assert!(res.is_err());
+
+    // Test Error: duplicate chars in alphabet via engine serde
+    let res_eng: Result<base58_turbo::Engine, _> =
+        serde_json::from_str(&format!("\"{}\"", bad_alpha_str));
+    assert!(res_eng.is_err());
+}

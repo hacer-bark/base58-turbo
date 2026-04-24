@@ -8,8 +8,12 @@ readme = "README.md"
 authors = ["Hacer"]
 
 [features]
-default = ["std"]
+default = ["serde"]
 std = []
+serde = ["std", "dep:serde"]
+
+[dependencies]
+serde = { version = "1", optional = true, features = ["derive"] }
 
 [dev-dependencies]
 rand = "0.10"
@@ -17,6 +21,7 @@ criterion = { version = "0.8", features = ["html_reports"] }
 bs58 = "0.5"
 base58 = "0.2"
 five8 = "1"
+serde_json = "1"
 base58-turbo = { path = "." }
 
 [[bench]]
