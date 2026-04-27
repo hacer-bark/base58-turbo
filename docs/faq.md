@@ -3,8 +3,8 @@
 ## 🛡️ Safety & Verification
 
 ### Q: The crate uses `unsafe`. How can you claim it is safe?
-**A:** We distinguish between "Safe Rust" (compiler-checked) and "Memory Safe" (mathematically proven).
-While we use `unsafe` pointers and intrinsics to achieve raw speed, we rely on a **Formal Verification Pipeline**. We have mathematically proven via Kani and MIRI that for the verified paths, **no possible input** (0..1024 bytes) can trigger a buffer overflow, segfault, or panic via the public API.
+**A:** We distinguish between "Safe Rust" (compiler-checked) and "Memory Safe" (verified via strict checking).
+While we use `unsafe` pointers and intrinsics to achieve raw speed, we rely on a **Strict Verification Pipeline**. We have verified via continuous Fuzzing, MemorySanitizer, and MIRI that for the verified paths, **no possible input** (0..1024 bytes for encoding, 0..2048 bytes for decoding) can trigger a buffer overflow, segfault, or panic via the public API.
 
 **[Read the Verification Report](./verification.md)**
 
@@ -13,8 +13,8 @@ While we use `unsafe` pointers and intrinsics to achieve raw speed, we rely on a
 The decoder is resilient. If you pass invalid Base58 strings or malicious payloads, the library simply returns a `Result::Err`. It will **never** panic or cause Undefined Behavior (UB) as long as you use the Safe API.
 
 ### Q: Is there a limit to input size?
-**A:** **Yes, 1024 bytes.**
-To ensure we can use stack-allocated bignum buffers for maximum performance (no heap allocation), we currently limit inputs to 1024 bytes. This covers almost all use cases for Base58, including public keys, addresses, and IPFS CIDs.
+**A:** **Yes, 1024 bytes for encoding and 2048 bytes for decoding.**
+To ensure we can use stack-allocated bignum buffers for maximum performance (no heap allocation), we currently limit inputs to 1024 bytes for encoding and 2048 bytes for decoding. This covers almost all use cases for Base58, including public keys, addresses, and IPFS CIDs.
 
 ### Q: Does this work on ARM (Apple Silicon / Raspberry Pi)?
 **A:** **Yes.**
@@ -52,6 +52,6 @@ If you are processing thousands of addresses or signatures per second (e.g., in 
 
 ### Q: How can I trust this code?
 **A:** **Trust the math, not the author.**
-1.  Check the **[GitHub Actions](https://github.com/hacer-bark/base58-turbo/actions)** to see the live Kani/MIRI logs.
+1.  Check the **[GitHub Actions](https://github.com/hacer-bark/base58-turbo/actions)** to see the live MIRI, Fuzzing, and MSan logs.
 2.  Inspect the **GPG Signatures** on our commits.
 3.  Read the **[Verification Report](./verification.md)** to understand our audit methodology.

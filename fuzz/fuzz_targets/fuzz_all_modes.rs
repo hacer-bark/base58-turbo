@@ -1,6 +1,6 @@
 #![no_main]
+use base58_turbo::{BITCOIN, Engine, Error, FLICKR, MONERO, RIPPLE};
 use libfuzzer_sys::fuzz_target;
-use base58_turbo::{Engine, BITCOIN, MONERO, RIPPLE, FLICKR, Error};
 
 fuzz_target!(|data: &[u8]| {
     if data.is_empty() {
@@ -25,7 +25,7 @@ fuzz_target!(|data: &[u8]| {
             } else {
                 (BITCOIN, &data[1..])
             }
-        },
+        }
         _ => {
             // Test invalid alphabet creation
             if data.len() >= 59 {
@@ -44,7 +44,11 @@ fuzz_target!(|data: &[u8]| {
     match encode_result {
         Ok(encoded_string) => {
             // [Invariant]: If we got Ok, input MUST be <= 1024
-            assert!(payload.len() <= 1024, "API succeeded on input > 1024 bytes! len={}", payload.len());
+            assert!(
+                payload.len() <= 1024,
+                "API succeeded on input > 1024 bytes! len={}",
+                payload.len()
+            );
 
             // ----------------------------------------------------------------------
             // 3. Stress Test: ROUND TRIP
@@ -53,7 +57,7 @@ fuzz_target!(|data: &[u8]| {
             match decode_result {
                 Ok(decoded_data) => {
                     assert_eq!(payload, decoded_data.as_slice(), "Round trip mismatch");
-                },
+                }
                 Err(e) => {
                     panic!("Failed to decode valid round-trip data: {:?}", e);
                 }
@@ -69,17 +73,22 @@ fuzz_target!(|data: &[u8]| {
             // Test decode_into with too small buffer
             if len > 0 {
                 let mut small_buf = vec![0u8; len - 1];
-                assert_eq!(engine.decode_into(&encoded_string, &mut small_buf), Err(Error::BufferTooSmall));
-            }
-        },
-        Err(e) => {
-            match e {
-                Error::InputTooBig => {
-                    assert!(payload.len() > 1024, "InputTooBig returned for small input len={}", payload.len());
-                },
-                _ => panic!("Unexpected error during encode: {:?}", e),
+                assert_eq!(
+                    engine.decode_into(&encoded_string, &mut small_buf),
+                    Err(Error::BufferTooSmall)
+                );
             }
         }
+        Err(e) => match e {
+            Error::InputTooBig => {
+                assert!(
+                    payload.len() > 1024,
+                    "InputTooBig returned for small input len={}",
+                    payload.len()
+                );
+            }
+            _ => panic!("Unexpected error during encode: {:?}", e),
+        },
     }
 
     // ----------------------------------------------------------------------
@@ -90,20 +99,13 @@ fuzz_target!(|data: &[u8]| {
         Ok(decoded) => {
             // If it succeeded, round trip it back
             let _re_encoded = engine.encode(&decoded).unwrap();
-            // Note: Base58 can have multiple encodings for same data if leading zeros are involved in some implementations,
-            // but base58-turbo should be consistent.
-            // Actually, any valid Base58 string should decode to SOMETHING.
-            // If we decode 'payload' (which is random bytes), and it succeeds,
-            // then 'payload' must be a valid Base58 string.
-            // Re-encoding it might not result in the EXACT same string if the input had leading '1's (in Bitcoin)
-            // that were not "minimal". But base58-turbo's encode(decode(x)) should be stable.
-        },
+        }
         Err(e) => {
             match e {
-                Error::InvalidCharacter => {},
+                Error::InvalidCharacter => {}
                 Error::InputTooBig => {
                     // Can happen if string is > 2048 OR if represented value > 1024 bytes
-                },
+                }
                 Error::BufferTooSmall => panic!("Allocating API returned BufferTooSmall"),
                 Error::WrongAlphabet => panic!("Decode returned WrongAlphabet"),
             }
@@ -122,7 +124,7 @@ fuzz_target!(|data: &[u8]| {
         let res = engine.decode_into(payload, &mut tiny_buf);
         // decode_into might return InvalidCharacter first if payload is garbage
         match res {
-            Err(Error::BufferTooSmall) | Err(Error::InvalidCharacter) => {},
+            Err(Error::BufferTooSmall) | Err(Error::InvalidCharacter) => {}
             _ => panic!("Unexpected result for tiny decode buffer: {:?}", res),
         }
     }

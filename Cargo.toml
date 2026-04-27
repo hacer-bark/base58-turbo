@@ -1,14 +1,19 @@
 [package]
 name = "base58-turbo"
 version = "0.1.0"
-rust-version = "1.86"
+rust-version = "1.87"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
 authors = ["Hacer"]
+description = "A high-performance Base58 encoder/decoder for Rust, optimized for high-throughput systems."
+repository = "https://github.com/hacer-bark/base58-turbo"
+documentation = "https://docs.rs/base58-turbo"
+keywords = ["base58", "encoding", "decoding", "performance", "crypto"]
+categories = ["encoding", "cryptography", "no-std"]
 
 [features]
-default = ["serde"]
+default = ["std"]
 std = []
 serde = ["std", "dep:serde"]
 
@@ -27,6 +32,3 @@ base58-turbo = { path = "." }
 [[bench]]
 name = "encoding_bench"
 harness = false
-
-[lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }

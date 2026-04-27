@@ -45,7 +45,7 @@ Base58 has a unique rule where leading zeros in the input map 1:1 to the first c
 
 While we leverage `unsafe` pointers and intrinsics for speed, the codebase is strictly audited:
 
-*   **Boundary Handling**: Every kernel is verified via **Kani Model Checking** to ensure it never reads or writes beyond its assigned slices.
+*   **Boundary Handling**: Every kernel is rigorously fuzz-tested to ensure it never reads or writes beyond its assigned slices.
 *   **No Allocation**: The core kernels are `no_std` compatible and perform zero heap allocations, ensuring deterministic performance and memory usage.
 *   **Provenance Verification**: **MIRI** is used in CI to ensure that pointer arithmetic adheres to the strict Rust memory model.
 

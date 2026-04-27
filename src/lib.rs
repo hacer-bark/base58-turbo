@@ -57,6 +57,7 @@
 //!
 //! | Feature | Default | Description |
 //! |---------|---------|-------------|
+//! | **`serde`** | **No** | Enables `serde` serialization/deserialization for Config and Engine. |
 //! | **`std`** | **Yes** | Enables `String` and `Vec` support. Disable this for `no_std` environments. |
 //!
 //! ## Safety & Verification
@@ -67,7 +68,7 @@
 //! *   **MSan Audited:** MemorySanitizer confirms no logic is ever performed on uninitialized memory.
 //! *   **Fuzzing:** The codebase is continuously fuzz-tested via `cargo-fuzz`.
 //!
-//! **[Learn More](https://github.com/hacer-bark/base58-turbo/blob/main/docs/verification.md)**: Details on our threat model and formal verification strategy.
+//! **[Learn More](https://github.com/hacer-bark/base58-turbo/blob/main/docs/verification.md)**: Details on our threat model and strict verification strategy.
 
 #![cfg_attr(not(any(feature = "std", test)), no_std)]
 #![doc(issue_tracker_base_url = "https://github.com/hacer-bark/base58-turbo/issues/")]

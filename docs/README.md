@@ -6,7 +6,7 @@ This directory contains detailed technical reports, formal verification proofs, 
 
 ### 🛡️ [Safety & Verification](verification.md)
 **Target Audience:** Security Auditors, Systems Engineers
-*   **Formal Verification:** How we use Kani to mathematically prove the absence of panics/overflows.
+*   **Fuzzing & Memory Checks:** How we use continuous fuzzing and MemorySanitizer to ensure safety.
 *   **UB Checks:** Details on MIRI usage and strict provenance.
 *   **Threat Model:** What we protect against and our trust boundaries.
 
@@ -20,4 +20,4 @@ This directory contains detailed technical reports, formal verification proofs, 
 **Target Audience:** All Users
 *   **Integration:** Using `no_std` and embedded environments.
 *   **Performance:** Why Base58 is slower than Base64 and how we optimize it.
-*   **Limits:** Information about the 1024-byte input limit.
+*   **Limits:** Information about the 1024-byte/2048-byte input limits for encoding and decoding.

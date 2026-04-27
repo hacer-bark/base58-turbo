@@ -51,6 +51,14 @@ jobs:
           ) &
           PID_STD=$!
 
+          # --- 3. ALL FEATURES (Serde) ---
+          (
+            export CARGO_TARGET_DIR="target_logic_all"
+            echo "[all-features] Running..."
+            cargo test --all-features > all.log 2>&1
+          ) &
+          PID_ALL=$!
+
           # --- WAIT AND REPORT ---
           FAILED=0
 
@@ -59,6 +67,9 @@ jobs:
 
           wait $PID_STD
           if [ $? -ne 0 ]; then echo "[std] FAILED. Logs:"; cat std.log; FAILED=1; else echo "[std] PASSED"; fi
+
+          wait $PID_ALL
+          if [ $? -ne 0 ]; then echo "[all-features] FAILED. Logs:"; cat all.log; FAILED=1; else echo "[all-features] PASSED"; fi
 
           if [ $FAILED -ne 0 ]; then exit 1; fi
           set -e
@@ -87,6 +98,6 @@ jobs:
         run: |
           RUSTFLAGS="-Z sanitizer=memory" cargo test -Z build-std \
             --target x86_64-unknown-linux-gnu \
-            --features "std" \
+            --all-features \
             --lib \
             --tests

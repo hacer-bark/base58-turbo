@@ -122,6 +122,7 @@ Achieving maximum throughput must not cost memory safety. While we leverage `uns
 
 | Feature | Default | Description |
 | :--- | :---: | :--- |
+| `serde` | ❌ | Enables `serde` serialization/deserialization for Config and Engine |
 | `std` | ✅ | Enables `String` and `Vec` support. Disable for `no_std` |
 
 ## Documentation
