@@ -228,11 +228,12 @@ unsafe fn process_fixed_25(src: *const u8, out: &mut [u64]) -> usize {
 
     // 2. Matrix Multiplication (Base 58^5)
     let mut digits_5 = [0u64; 8];
-    for i in 0..7 {
-        let val = input[i] as u64;
-        for k in 0..7 {
-            digits_5[k + 1] += val * (TABLE_25[i][k] as u64);
+    for k in 0..7 {
+        let mut sum = 0u64;
+        for i in 0..7 {
+            sum += (input[i] as u64) * (TABLE_25[i][k] as u64);
         }
+        digits_5[k + 1] = sum;
     }
 
     // 3. Reduction
@@ -265,11 +266,12 @@ unsafe fn process_fixed_32(src: *const u8, out_digits: &mut [u64]) -> usize {
 
     // 2. Matrix Multiplication
     let mut digits_5 = [0u128; 9];
-    for i in 0..8 {
-        let val = input[i] as u128;
-        for k in 0..8 {
-            digits_5[k + 1] += val * (TABLE_32[i][k] as u128);
+    for k in 0..8 {
+        let mut sum = 0u128;
+        for i in 0..8 {
+            sum += (input[i] as u128) * (TABLE_32[i][k] as u128);
         }
+        digits_5[k + 1] = sum;
     }
 
     // 3. Reduction
@@ -306,11 +308,12 @@ unsafe fn process_fixed_64(src: *const u8, out_digits: &mut [u64]) -> usize {
     let mut digits = [0u64; 19];
 
     // Batch 1: Inputs 0-7
-    for i in 0..8 {
-        let val = input[i] as u64;
-        for k in 0..18 {
-            digits[k + 1] += val * (TABLE_64[i][k] as u64);
+    for k in 0..18 {
+        let mut sum = 0u64;
+        for i in 0..8 {
+            sum += (input[i] as u64) * (TABLE_64[i][k] as u64);
         }
+        digits[k + 1] += sum;
     }
 
     // Reduce Batch 1
@@ -324,11 +327,12 @@ unsafe fn process_fixed_64(src: *const u8, out_digits: &mut [u64]) -> usize {
     carry = 0;
 
     // Batch 2: Inputs 8-15
-    for i in 8..16 {
-        let val = input[i] as u64;
-        for k in 0..18 {
-            digits[k + 1] += val * (TABLE_64[i][k] as u64);
+    for k in 0..18 {
+        let mut sum = 0u64;
+        for i in 8..16 {
+            sum += (input[i] as u64) * (TABLE_64[i][k] as u64);
         }
+        digits[k + 1] += sum;
     }
 
     // Final Reduction
@@ -380,11 +384,12 @@ unsafe fn process_fixed_69(src: *const u8, out_digits: &mut [u64]) -> usize {
 
     // Helper closure to process a batch of 6 inputs
     let mut process_batch = |start_idx: usize| {
-        for i in start_idx..(start_idx + 6) {
-            let val = input[i] as u64;
-            for k in 0..20 {
-                digits[k + 1] += val * (TABLE_69[i][k] as u64);
+        for k in 0..20 {
+            let mut sum = 0u64;
+            for i in start_idx..(start_idx + 6) {
+                sum += (input[i] as u64) * (TABLE_69[i][k] as u64);
             }
+            digits[k + 1] += sum;
         }
         // Reduction
         for k in (1..21).rev() {
@@ -454,11 +459,12 @@ unsafe fn process_general(mut src: *const u8, mut len: usize, out_digits: &mut [
         let mut carry = 0u64;
 
         // Batch 1
-        for i in 0..8 {
-            let val = input[i] as u64;
-            for k in 0..18 {
-                acc[k + 1] += val * (TABLE_64[i][k] as u64);
+        for k in 0..18 {
+            let mut sum = 0u64;
+            for i in 0..8 {
+                sum += (input[i] as u64) * (TABLE_64[i][k] as u64);
             }
+            acc[k + 1] += sum;
         }
         for k in (1..19).rev() {
             let val = acc[k] + carry;
@@ -469,11 +475,12 @@ unsafe fn process_general(mut src: *const u8, mut len: usize, out_digits: &mut [
         carry = 0;
 
         // Batch 2
-        for i in 8..16 {
-            let val = input[i] as u64;
-            for k in 0..18 {
-                acc[k + 1] += val * (TABLE_64[i][k] as u64);
+        for k in 0..18 {
+            let mut sum = 0u64;
+            for i in 8..16 {
+                sum += (input[i] as u64) * (TABLE_64[i][k] as u64);
             }
+            acc[k + 1] += sum;
         }
         for k in (1..19).rev() {
             let val = acc[k] + carry;
@@ -498,11 +505,12 @@ unsafe fn process_general(mut src: *const u8, mut len: usize, out_digits: &mut [
         }
 
         let mut acc = [0u64; 9];
-        for i in 0..8 {
-            let val = input[i] as u64;
-            for k in 0..8 {
-                acc[k + 1] += val * (TABLE_32[i][k] as u64);
+        for k in 0..8 {
+            let mut sum = 0u64;
+            for i in 0..8 {
+                sum += (input[i] as u64) * (TABLE_32[i][k] as u64);
             }
+            acc[k + 1] = sum;
         }
 
         let mut carry = 0u64;
