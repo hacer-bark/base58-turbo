@@ -1,6 +1,6 @@
 <div align="center">
   <h1>🚀 Base58 Turbo</h1>
-  <p><strong>The absolute fastest memory-safe Base58 implementation. Period.</strong></p>
+  <p><strong>The absolute fastest general-purpose Base58 implementation.</strong></p>
 
   [![Crates.io](https://img.shields.io/crates/v/base58-turbo.svg?style=for-the-badge&color=fc8d62)](https://crates.io/crates/base58-turbo)
   [![License](https://img.shields.io/crates/l/base58-turbo.svg?style=for-the-badge&color=8da0cb)](https://crates.io/crates/base58-turbo)
