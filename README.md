@@ -1,15 +1,18 @@
-# Base58 Turbo
+<div align="center">
+  <h1>🚀 Base58 Turbo</h1>
+  <p><strong>The absolute fastest memory-safe Base58 implementation. Period.</strong></p>
 
-[![Crates.io](https://img.shields.io/crates/v/base58-turbo.svg)](https://crates.io/crates/base58-turbo)
-[![License](https://img.shields.io/crates/l/base58-turbo.svg)](https://crates.io/crates/base58-turbo)
-[![MIRI Verified](https://img.shields.io/github/actions/workflow/status/hacer-bark/base58-turbo/miri.yml?label=MIRI%20Verified)](https://github.com/hacer-bark/base58-turbo/actions/workflows/miri.yml)
-[![Logic Tests](https://img.shields.io/github/actions/workflow/status/hacer-bark/base58-turbo/tests.yml?label=Logic%20Tests)](https://github.com/hacer-bark/base58-turbo/actions/workflows/tests.yml)
+  [![Crates.io](https://img.shields.io/crates/v/base58-turbo.svg?style=for-the-badge&color=fc8d62)](https://crates.io/crates/base58-turbo)
+  [![License](https://img.shields.io/crates/l/base58-turbo.svg?style=for-the-badge&color=8da0cb)](https://crates.io/crates/base58-turbo)
+  [![MIRI Verified](https://img.shields.io/github/actions/workflow/status/hacer-bark/base58-turbo/miri.yml?label=MIRI%20Verified&style=for-the-badge&color=66c2a5)](https://github.com/hacer-bark/base58-turbo/actions/workflows/miri.yml)
+  [![Logic Tests](https://img.shields.io/github/actions/workflow/status/hacer-bark/base58-turbo/tests.yml?label=Logic%20Tests&style=for-the-badge&color=e78ac3)](https://github.com/hacer-bark/base58-turbo/actions/workflows/tests.yml)
+</div>
 
-**The fastest memory-safe Base58 implementation.**
+<br/>
 
 `base58-turbo` is a production-grade library engineered for **High Frequency Trading (HFT)**, **Blockchain Nodes**, and **Mission-Critical Servers** where CPU cycles are scarce and Undefined Behavior (UB) is unacceptable.
 
-It aligns with **modern hardware reality** without sacrificing portability, utilizing optimized scalar kernels, matrix multiplication arithmetic, and vectorized zero handling.
+It aligns with **modern hardware reality** without sacrificing portability. By utilizing hyper-optimized scalar kernels, matrix multiplication arithmetic, and SWAR (SIMD Within A Register) zero handling, `base58-turbo` achieves blazing fast speeds **WITHOUT** requiring dedicated SIMD instructions (like AVX-512 or NEON).
 
 ## Quick Start
 
@@ -89,15 +92,19 @@ The public API (traits, structs, and error types) is considered **Stable**.
 *   We adhere to **Semantic Versioning**.
 *   The current API surface will remain valid and backward-compatible throughout the `0.1.x` lifecycle.
 
-## Performance
+## 🚀 Performance & Architecture
 
-`base58-turbo` is designed for maximum throughput, utilizing:
-- **Matrix Multiplication Arithmetic**: Converts large chunks (25, 32, 64 bytes) using precomputed weights and 128-bit accumulation.
-- **Vectorized Zero Handling**: Rapidly processes leading zeros using 64-bit SIMD patterns even in scalar code.
-- **2-Byte Lookup Tables (LUT)**: Emits two characters at a time during encoding to reduce branch pressure.
-- **High-Radix Processing**: Processes input in Base 58^10 (decoding) and Base 58^5 (encoding) to minimize bignum divisions.
+`base58-turbo` is **the fastest Base58 implementation without SIMD**, and it frequently **beats heavily SIMD-optimized implementations** (like `five8`) in head-to-head benchmarks. We achieve this by fully respecting how modern CPUs actually execute instructions.
 
-### Benchmarks
+### Why Are We Faster Than SIMD?
+We bypass hardware-specific SIMD registers entirely and extract maximum performance directly from standard ALUs using intelligent byte-chunking:
+
+*   **Native `u64` Decoding (Shrinking):** When decoding, Base58 strings mathematically shrink into bytes. Because there is no data expansion, we can natively process chunks in `u64` registers. This essentially doubles our throughput natively, allowing our general loop to hit the physical limits of hardware without any fancy SIMD or pre-computed paths.
+*   **`u32` -> `u64` Expansion (Encoding):** When encoding, bytes expand into Base58. If we tried to process `u64` chunks, the multiplication step would overflow into `u128`, which absolutely destroys CPU performance. Instead, we use `u32` chunks that expand safely into `u64` for heavy arithmetic.
+*   **Matrix Multiplication Arithmetic:** To bypass the `u32` encoding limitation, we provide **hardcoded, pre-computed tables for common sizes** (25, 32, 64, and 69 bytes). This matrix-multiplication approach avoids expensive divisions entirely.
+*   **2-Byte Lookup Tables (LUT)**: We emit two characters at a time during encoding (a single 16-bit write) using a pre-computed `58 * 58` table, drastically reducing branch mispredictions in the hot path.
+
+### 📊 Benchmarks
 
 | Operation       | `base58-turbo`                  | `bs58`                        | Speedup    |
 |-----------------|---------------------------------|-------------------------------|------------|

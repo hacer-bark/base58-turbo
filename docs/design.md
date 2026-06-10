@@ -1,54 +1,43 @@
 # 🏗️ Architecture & Design
 
-This document details the internal engineering of `base58-turbo`. The design goal is to maximize throughput for **Memory-Safe Rust** by leveraging high-radix arithmetic, matrix multiplication, and minimizing CPU pipeline stalls.
+This document details the internal engineering and primary design constraints of `base58-turbo`. 
 
-## Design Philosophy: Reducing Division Pressure
+## Core Constraint: Processing Multiple Bytes
 
-Base58 is inherently slower than Base2-based encodings (like Base64) because it requires arbitrary-precision division by 58. On modern CPUs, integer division is one of the most expensive operations (20-80 cycles depending on the architecture).
+Base58 conversion is fundamentally bottlenecked by arbitrary-precision division and multiplication by 58. To optimize this, the core strategy involves processing multiple bytes simultaneously using `u64` and `u32` types. However, the asymmetric nature of encoding (expanding data) versus decoding (shrinking data) dictates drastically different approaches for each pipeline.
 
-`base58-turbo` optimizes this by:
-1.  **Batch Processing**: Processing multiple bytes at once to reduce the number of bignum iterations.
-2.  **High-Radix Arithmetic**: Using Base 58^5 and 58^10 digits instead of Base 58^1.
-3.  **Matrix Multiplication Arithmetic**: Using precomputed weights to avoid divisions for common input sizes.
+### Encoding: The `u32` vs `u128` Bottleneck
 
-## 1. Matrix Multiplication Arithmetic (Encoding)
+A common question from developers reviewing the source might be code: *Why do we process `u32` chunks during encoding, when decoding processes `u64` chunks natively?*
 
-For common input sizes (25, 32, 64, 69 bytes), we bypass the standard "multiply-and-add" bignum loop. Instead, we treat the input as a vector and multiply it by a precomputed matrix of weights.
+The answer lies in type expansion during multiplication. During encoding, before the actual multiplication step, we must convert the `u32` chunk into a `u64`. This expansion provides the necessary mathematical space to perform heavy arithmetic (such as multiplication) without overflowing. Modern x64 CPUs chew through `u64` math natively without issues.
 
-*   **Precomputed Weights**: For each input byte position, we precalculate its contribution to the final Base 58^5 digits.
-*   **128-bit Accumulation**: We use `u128` to accumulate the sums of products, ensuring no overflow occurs during the matrix multiplication.
-*   **Single-Pass Reduction**: A final reduction pass handles carries between digits, requiring significantly fewer divisions than the naive approach.
+If we attempted to bump the initial byte processing to `u64` in one go, the multiplication step would require `u128` registers. This destroys performance, as CPUs struggle with native `u128` math operations, causing throughput to drop significantly.
 
-## 2. High-Radix Radix (58^10)
+Because we are constrained to `u32` processing in the general encoding loop, we compensate by providing **hardcoded, pre-computed paths for common sizes** (e.g., 25, 32, 64, and 69 bytes). These specialized kernels bypass the general bignum loop entirely, utilizing matrix multiplication with precomputed weights to maximize performance.
 
-Standard Base58 implementations divide the entire bignum by 58 for every single output character. `base58-turbo` uses a higher radix:
+### Decoding: Native `u64` Processing
 
-*   **Base 58^10**: Since 58^10 (430,804,206,899,405,824) fits within a 64-bit integer, we can process 10 characters at a time in the bignum loop.
-*   **Loop Unrolling**: We unroll the bignum multiplication and addition to maximize **Instruction Level Parallelism (ILP)**.
-*   **SWAR-like Processing**: We treat 64-bit words as digits, allowing us to move 8 bytes of internal state with a single instruction.
+Decoding operates in the opposite direction: it *shrinks* the size of the bytes. 
 
-## 3. 2-Byte Lookup Table (LUT)
+Because the data is contracting, we do not face the same type-expansion constraints as encoding. This means we *can* natively process chunks as `u64` without needing to overflow into `u128` arithmetic. 
 
-During character emission (encoding), converting a numerical value to its alphabet representation is a bottleneck due to branch misprediction.
+As a result, decoding achieves blazing fast performance natively—effectively doubling the throughput compared to the native encoding loop. Because the native `u64` processing extracts as much performance as possible across any payload length, **we do not use any specialized pre-computed paths or tables for decoding**. The general implementation is already running at the hardware limit without hitting a performance wall or requiring SIMD.
 
-*   **Squared LUT**: We precompute a 3,364-entry table (`58 * 58`) that maps pairs of remainders to their 2-byte ASCII representations.
-*   **Vectorized Emission**: We write 2 characters (16 bits) to the output buffer in a single unaligned write. This halves the number of branches and memory operations in the hot path.
+## Additional Optimizations
 
-## 4. Vectorized Zero Handling
+While the `u32`/`u64` asymmetry is the primary architectural driver, several other techniques are used to eliminate stalls:
 
-Base58 has a unique rule where leading zeros in the input map 1:1 to the first character of the alphabet (e.g., '1' in Bitcoin).
+### 1. 2-Byte Lookup Table (LUT)
+During character emission in encoding, converting numerical values to the Base58 alphabet can cause branch mispredictions. We use a precomputed 3,364-entry table (`58 * 58`) that maps pairs of remainders directly to their 2-byte ASCII representation. We write these 2 characters (16 bits) to the output buffer in a single unaligned write, halving branch overhead.
 
-*   **64-bit Pattern Matching**: We check for 8 leading zeros at once using 64-bit loads and comparisons.
-*   **Vectorized Fill**: We use 64-bit patterns (e.g., `0x3131313131313131` for '1') to rapidly fill the output buffer, bypassing byte-by-byte loops.
+### 2. High-Radix Base (58^10)
+Standard implementations divide by 58 for every output character. We use Base 58^10 since 430,804,206,899,405,824 fits within a 64-bit integer, allowing us to process 10 characters per iteration in the bignum loop.
 
-## 5. Memory Safety & Verification
+### 3. Vectorized Zero Handling
+Base58 maps leading zeros to the first character of the alphabet (e.g., '1' in Bitcoin). We detect 8 leading zeros at once using 64-bit loads and rapidly fill the output buffer with a 64-bit pattern (e.g., `0x3131313131313131`), bypassing byte-by-byte loops.
 
-While we leverage `unsafe` pointers and intrinsics for speed, the codebase is strictly audited:
-
-*   **Boundary Handling**: Every kernel is rigorously fuzz-tested to ensure it never reads or writes beyond its assigned slices.
-*   **No Allocation**: The core kernels are `no_std` compatible and perform zero heap allocations, ensuring deterministic performance and memory usage.
-*   **Provenance Verification**: **MIRI** is used in CI to ensure that pointer arithmetic adheres to the strict Rust memory model.
-
-## Summary
-
-`base58-turbo` bridges the gap between the flexibility of Rust and the raw performance of handcrafted assembly. By focusing on reducing division pressure and maximizing memory bandwidth utilization, it provides a state-of-the-art Base58 engine for performance-critical applications.
+### 4. Verification and Safety
+The kernels are rigorously audited:
+*   **No Allocation**: The core paths are `no_std` compatible and perform zero heap allocations.
+*   **Provenance Verification**: **MIRI** is used in CI to ensure pointer arithmetic adheres strictly to the Rust memory model.

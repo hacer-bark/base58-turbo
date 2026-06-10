@@ -10,6 +10,12 @@ This directory contains detailed technical reports, formal verification proofs, 
 *   **UB Checks:** Details on MIRI usage and strict provenance.
 *   **Threat Model:** What we protect against and our trust boundaries.
 
+### ⚡ [Benchmarks & Methodology](benchmarks)
+**Target Audience:** HFT Developers, Performance Engineers
+*   **Methodology:** How we measure throughput and latency (CPU pinning, cache warming).
+*   **Hardware Specs:** Detailed breakdown of the test environments (Intel Xeon, Apple M3, etc.).
+*   **Reproduction:** Scripts to run the benchmarks yourself.
+
 ### 🏗️ [Architecture & Design](design.md)
 **Target Audience:** Contributors, Curious Developers
 *   **Matrix Multiplication Arithmetic:** How we use precomputed weights to speed up encoding.
