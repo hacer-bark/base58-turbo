@@ -483,3 +483,129 @@ fn test_serde_config_engine() {
         serde_json::from_str(&format!("\"{}\"", bad_alpha_str));
     assert!(res_eng.is_err());
 }
+
+fn decode_hex(s: &str) -> Vec<u8> {
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+        .collect()
+}
+
+#[test]
+fn test_public_vectors() {
+    // Vectors from standard Bitcoin Base58 test suite
+    let vectors: &[(&str, &str)] = &[
+        ("61", "2g"),
+        ("626262", "a3gV"),
+        ("636363", "aPEr"),
+        ("73696d706c792061206c6f6e6720737472696e67", "2cFupjhnEsSn59qHXstmK2ffpLv2"),
+        ("00eb15231dfceb60925886b67d065299925915aeb172c06647", "1NS17iag9jJgTHD1VXjvLCEnZuQ3rJDE9L"),
+    ];
+
+    for (hex, expected_b58) in vectors {
+        let input = decode_hex(hex);
+        let actual_b58 = BITCOIN.encode(&input).unwrap();
+        assert_eq!(actual_b58, *expected_b58);
+
+        let decoded = BITCOIN.decode(*expected_b58).unwrap();
+        assert_eq!(decoded, input);
+    }
+}
+
+#[test]
+#[cfg(not(miri))]
+fn test_vs_bs58_crate_monero() {
+    let mut seed: u64 = rand::random();
+    fn next_byte(seed: &mut u64) -> u8 {
+        *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+        (*seed >> 56) as u8
+    }
+
+    for len in (0..740).step_by(9) {
+        let mut input = Vec::with_capacity(len);
+        for _ in 0..len {
+            input.push(next_byte(&mut seed));
+        }
+
+        let expected_str = bs58::encode(&input)
+            .with_alphabet(bs58::Alphabet::MONERO)
+            .into_string();
+
+        let actual_str = base58_turbo::MONERO.encode(&input).expect("Turbo encode failed");
+
+        assert_eq!(
+            actual_str, expected_str,
+            "Monero encoding mismatch at len {}",
+            len
+        );
+
+        let decoded_bytes = base58_turbo::MONERO.decode(&expected_str).expect("Turbo decode failed");
+        assert_eq!(
+            decoded_bytes, input,
+            "Monero decoding mismatch at len {}",
+            len
+        );
+    }
+}
+
+#[test]
+#[cfg(not(miri))]
+fn test_vs_base58_crate_bitcoin() {
+    use base58::{ToBase58, FromBase58};
+    let mut seed: u64 = rand::random();
+    fn next_byte(seed: &mut u64) -> u8 {
+        *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+        (*seed >> 56) as u8
+    }
+
+    for len in (0..740).step_by(11) {
+        let mut input = Vec::with_capacity(len);
+        for _ in 0..len {
+            input.push(next_byte(&mut seed));
+        }
+
+        let expected_str = input.to_base58();
+        let actual_str = BITCOIN.encode(&input).expect("Turbo encode failed");
+        assert_eq!(actual_str, expected_str, "base58 crate encoding mismatch at len {}", len);
+
+        let decoded_bytes = BITCOIN.decode(&expected_str).expect("Turbo decode failed");
+        assert_eq!(decoded_bytes, input, "base58 crate decoding mismatch at len {}", len);
+    }
+}
+
+#[test]
+#[cfg(not(miri))]
+fn test_vs_five8_crate_bitcoin() {
+    use five8::{decode_32, decode_64};
+    let mut seed: u64 = rand::random();
+    fn next_byte(seed: &mut u64) -> u8 {
+        *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+        (*seed >> 56) as u8
+    }
+
+    // five8 only supports 32 and 64 bytes
+    for &len in &[32, 64] {
+        let mut input = Vec::with_capacity(len);
+        for _ in 0..len {
+            input.push(next_byte(&mut seed));
+        }
+
+        let actual_str = BITCOIN.encode(&input).expect("Turbo encode failed");
+
+        if len == 32 {
+            let mut decode_buf = [0u8; 32];
+            // five8 strictly decodes 32 bytes from standard base58 if possible
+            let res = decode_32(actual_str.as_bytes(), &mut decode_buf);
+            if res.is_ok() {
+                assert_eq!(decode_buf.as_slice(), input.as_slice());
+            }
+        } else if len == 64 {
+            let mut decode_buf = [0u8; 64];
+            let res = decode_64(actual_str.as_bytes(), &mut decode_buf);
+            if res.is_ok() {
+                assert_eq!(decode_buf.as_slice(), input.as_slice());
+            }
+        }
+    }
+}
+

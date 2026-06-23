@@ -1,5 +1,5 @@
 <div align="center">
-  <h1>🚀 Base58 Turbo</h1>
+  <h1>Base58 Turbo</h1>
   <p><strong>The absolute fastest general-purpose Base58 implementation.</strong></p>
 
   [![Crates.io](https://img.shields.io/crates/v/base58-turbo.svg?style=for-the-badge&color=fc8d62)](https://crates.io/crates/base58-turbo)
@@ -72,6 +72,26 @@ fn main() {
 }
 ```
 
+### Native Monero Chunking (XMR)
+
+`base58-turbo` includes native, highly-optimized support for Monero's specific block-chunked Base58 format. This processes payload strictly in 8-byte blocks padded to 11 characters. 
+
+```rust
+use base58_turbo::xmr;
+
+fn main() {
+    let payload = b"Hello World"; // Typically 69-byte addresses
+    
+    // Returns Result<String, Error>
+    let encoded = xmr::encode(payload).unwrap();
+    
+    // Returns Result<Vec<u8>, Error>
+    let decoded = xmr::decode(&encoded).unwrap();
+}
+```
+
+Zero-allocation `xmr::encode_into` and `xmr::decode_into` APIs are also provided!
+
 ## Engines
 
 Supports multiple Base58 alphabets:
@@ -92,7 +112,7 @@ The public API (traits, structs, and error types) is considered **Stable**.
 *   We adhere to **Semantic Versioning**.
 *   The current API surface will remain valid and backward-compatible throughout the `0.1.x` lifecycle.
 
-## 🚀 Performance & Architecture
+## Performance & Architecture
 
 `base58-turbo` is **the fastest Base58 implementation without SIMD**, and it frequently **beats heavily SIMD-optimized implementations** (like `five8`) in head-to-head benchmarks. We achieve this by fully respecting how modern CPUs actually execute instructions.
 
@@ -104,7 +124,9 @@ We bypass hardware-specific SIMD registers entirely and extract maximum performa
 *   **Matrix Multiplication Arithmetic:** To bypass the `u32` encoding limitation, we provide **hardcoded, pre-computed tables for common sizes** (25, 32, 64, and 69 bytes). This matrix-multiplication approach avoids expensive divisions entirely.
 *   **2-Byte Lookup Tables (LUT)**: We emit two characters at a time during encoding (a single 16-bit write) using a pre-computed `58 * 58` table, drastically reducing branch mispredictions in the hot path.
 
-### 📊 Benchmarks
+### Benchmarks
+
+#### Standard Base58
 
 | Operation       | `base58-turbo`                  | `bs58`                        | Speedup    |
 |-----------------|---------------------------------|-------------------------------|------------|
@@ -114,6 +136,19 @@ We bypass hardware-specific SIMD registers entirely and extract maximum performa
 | Decode (64B)    | 74.1 ns<br>(1.11 GiB/s)         | 1.25 µs<br>(67.1 MiB/s)       | **16.9×**  |
 | Encode (128B)   | 550 ns<br>(222 MiB/s)           | 17.4 µs<br>(7.02 MiB/s)       | **31.6×**  |
 | Decode (128B)   | 175 ns<br>(952 MiB/s)           | 5.09 µs<br>(32.8 MiB/s)       | **29.0×**  |
+
+#### Monero Chunked Base58 (XMR)
+
+| Operation       | `base58-turbo::xmr`             | `base58-monero`               | Speedup    |
+|-----------------|---------------------------------|-------------------------------|------------|
+| Encode (32B)    | 139 ns<br>(219 MiB/s)           | 358 ns<br>(85 MiB/s)          | **2.5×**   |
+| Decode (32B)    | 157 ns<br>(260 MiB/s)           | 235 ns<br>(173 MiB/s)         | **1.5×**   |
+| Encode (64B)    | 246 ns<br>(247 MiB/s)           | 762 ns<br>(80 MiB/s)          | **3.1×**   |
+| Decode (64B)    | 278 ns<br>(300 MiB/s)           | 441 ns<br>(189 MiB/s)         | **1.5×**   |
+| Encode (69B)*   | 259 ns<br>(253 MiB/s)           | 906 ns<br>(72 MiB/s)          | **3.5×**   |
+| Decode (69B)*   | 343 ns<br>(263 MiB/s)           | 668 ns<br>(135 MiB/s)         | **1.9×**   |
+
+*\*\ 69 bytes is the standard Monero address payload size.*
 
 ## Safety & Verification
 

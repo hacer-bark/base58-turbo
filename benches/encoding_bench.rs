@@ -15,6 +15,8 @@ use bs58::{encode as encode_std, decode as decode_std, Alphabet as AlphabetStd};
 use base58::{FromBase58, ToBase58};
 // 4. The five8
 use five8::{decode_32, decode_64, encode_32, encode_64};
+// 5. base58_monero
+use base58_monero::base58 as base58_xmr;
 
 fn generate_random_data(size: usize) -> Vec<u8> {
     let mut data = vec![0u8; size];
@@ -100,6 +102,16 @@ fn bench_comparison(c: &mut Criterion) {
             });
         }
 
+        // 5. XMR Turbo vs base58-monero
+        if should_run("xmr") || should_run("all") {
+            group.bench_with_input(BenchmarkId::new("Encode/Turbo_XMR", size), &input_data, |b, d| {
+                b.iter(|| base58_turbo::xmr::encode(black_box(d)).unwrap())
+            });
+            group.bench_with_input(BenchmarkId::new("Encode/base58_monero", size), &input_data, |b, d| {
+                b.iter(|| base58_xmr::encode(black_box(d)).unwrap())
+            });
+        }
+
         // ======================================================================
         // DECODE
         // ======================================================================
@@ -148,6 +160,17 @@ fn bench_comparison(c: &mut Criterion) {
 
                     black_box(buffer);
                 })
+            });
+        }
+
+        // 5. XMR Turbo vs base58-monero
+        if should_run("xmr") || should_run("all") {
+            let encoded_xmr = base58_turbo::xmr::encode(&input_data).unwrap();
+            group.bench_with_input(BenchmarkId::new("Decode/Turbo_XMR", size), &encoded_xmr, |b, d| {
+                b.iter(|| base58_turbo::xmr::decode(black_box(d)).unwrap())
+            });
+            group.bench_with_input(BenchmarkId::new("Decode/base58_monero", size), &encoded_xmr, |b, d| {
+                b.iter(|| base58_xmr::decode(black_box(d)).unwrap())
             });
         }
     }

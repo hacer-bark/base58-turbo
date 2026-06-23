@@ -55,6 +55,7 @@ Our benchmark suite is controlled via the `BENCH_TARGET` environment variable. T
 | `bs58` | The `bs58` crate. |
 | `base58` | The classic `base58` crate. |
 | `five8` | The `five8` crate. |
+| `xmr` | Compares `base58-turbo::xmr` against the `base58-monero` crate. |
 | `all` | Runs all of the above. |
 
 ### 4. Reproduction

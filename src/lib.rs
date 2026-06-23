@@ -73,14 +73,14 @@
 #![cfg_attr(not(any(feature = "std", test)), no_std)]
 #![doc(issue_tracker_base_url = "https://github.com/hacer-bark/base58-turbo/issues/")]
 #![deny(unsafe_op_in_unsafe_fn)]
-#![warn(missing_docs)]
-#![warn(rust_2018_idioms)]
-#![warn(unused_qualifications)]
+#![warn(missing_debug_implementations, missing_docs, rust_2018_idioms)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 // Use `serde` when enabled
 #[cfg(feature = "serde")]
 pub mod serde;
+
+pub mod xmr;
 
 mod decode;
 mod encode;
