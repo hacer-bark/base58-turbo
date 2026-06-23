@@ -148,7 +148,7 @@ We bypass hardware-specific SIMD registers entirely and extract maximum performa
 | Encode (69B)*   | 259 ns<br>(253 MiB/s)           | 906 ns<br>(72 MiB/s)          | **3.5×**   |
 | Decode (69B)*   | 343 ns<br>(263 MiB/s)           | 668 ns<br>(135 MiB/s)         | **1.9×**   |
 
-*\*\ 69 bytes is the standard Monero address payload size.*
+* *\ 69 bytes is the standard Monero address payload size.*
 
 ## Safety & Verification
 

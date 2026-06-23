@@ -41,11 +41,11 @@ fn test_vs_base58_monero_random() {
         // 1. Encode with trusted `base58-monero` crate
         let expected_str = base58::encode(&input).unwrap();
 
-        // 2. Encode with our new `xmr::encode`
+        // 2. Encode with `xmr::encode`
         let actual_str = xmr::encode(&input).expect("Turbo XMR encode failed");
         assert_eq!(actual_str, expected_str, "XMR encoding mismatch at len {}", len);
 
-        // 3. Decode with our new `xmr::decode`
+        // 3. Decode with `xmr::decode`
         let decoded_bytes = xmr::decode(&expected_str).expect("Turbo XMR decode failed");
         assert_eq!(decoded_bytes, input, "XMR decoding mismatch at len {}", len);
     }
