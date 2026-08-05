@@ -2,7 +2,8 @@
 //!
 //! [![Crates.io](https://img.shields.io/crates/v/base58-turbo.svg)](https://crates.io/crates/base58-turbo)
 //! [![Documentation](https://docs.rs/base58-turbo/badge.svg)](https://docs.rs/base58-turbo)
-//! [![License](https://img.shields.io/github/license/hacer-bark/base58-turbo)](https://github.com/hacer-bark/base58-turbo/blob/main/LICENSE)
+//! [![License](https://img.shields.io/github/license/hacer-bark/base58-turbo)](https://github.com/hacer-bark/base58-turbo/blob/main/LICENSE-APACHE)
+//! [![Unsafe forbidden](https://img.shields.io/badge/unsafe-forbidden-success.svg)](https://github.com/rust-secure-code/safety-dance/)
 //!
 //! A high-performance Base58 encoder/decoder for Rust, optimized for high-throughput systems.
 //!

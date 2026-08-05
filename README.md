@@ -5,6 +5,7 @@
   [![Crates.io](https://img.shields.io/crates/v/base58-turbo.svg?style=for-the-badge&color=fc8d62)](https://crates.io/crates/base58-turbo)
   [![License](https://img.shields.io/crates/l/base58-turbo.svg?style=for-the-badge&color=8da0cb)](https://crates.io/crates/base58-turbo)
   [![CI](https://img.shields.io/github/actions/workflow/status/hacer-bark/base58-turbo/tests.yml?label=CI&style=for-the-badge&color=e78ac3)](https://github.com/hacer-bark/base58-turbo/actions/workflows/tests.yml)
+  [![Unsafe Forbidden](https://img.shields.io/badge/unsafe-forbidden-success.svg?style=for-the-badge&color=66c2a5)](https://github.com/rust-secure-code/safety-dance/)
 </div>
 
 <br/>
