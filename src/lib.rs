@@ -3,8 +3,6 @@
 //! [![Crates.io](https://img.shields.io/crates/v/base58-turbo.svg)](https://crates.io/crates/base58-turbo)
 //! [![Documentation](https://docs.rs/base58-turbo/badge.svg)](https://docs.rs/base58-turbo)
 //! [![License](https://img.shields.io/github/license/hacer-bark/base58-turbo)](https://github.com/hacer-bark/base58-turbo/blob/main/LICENSE)
-//! [![MIRI Verified](https://img.shields.io/github/actions/workflow/status/hacer-bark/base58-turbo/miri.yml?label=MIRI%20Verified)](https://github.com/hacer-bark/base58-turbo/actions/workflows/miri.yml)
-//! [![Logic Tests](https://img.shields.io/github/actions/workflow/status/hacer-bark/base58-turbo/tests.yml?label=Logic%20Tests)](https://github.com/hacer-bark/base58-turbo/actions/workflows/tests.yml)
 //!
 //! A high-performance Base58 encoder/decoder for Rust, optimized for high-throughput systems.
 //!
@@ -62,19 +60,21 @@
 //!
 //! ## Safety & Verification
 //!
-//! This crate utilizes `unsafe` code for pointer arithmetic and optimized kernels to achieve maximum performance.
+//! This crate is `#![forbid(unsafe_code)]`: the compiler rejects any `unsafe` block
+//! anywhere in the crate. Performance comes from the base conversion algorithm and
+//! from shaping the hot loops so the compiler can drop bounds checks on its own,
+//! not from bypassing them.
 //!
-//! *   **MIRI Tests:** Core logic and fallbacks are verified with **MIRI** (Undefined Behavior checker) in CI.
-//! *   **MSan Audited:** MemorySanitizer confirms no logic is ever performed on uninitialized memory.
-//! *   **Fuzzing:** The codebase is continuously fuzz-tested via `cargo-fuzz`.
-//!
-//! **[Learn More](https://github.com/hacer-bark/base58-turbo/blob/main/docs/verification.md)**: Details on our threat model and strict verification strategy.
+//! *   **Tests:** exact conformance vectors, every kernel-dispatch and scratch-buffer
+//!     boundary, and randomized cross-validation against `bs58`, `base58`, `five8`,
+//!     and `base58-monero` (see `tests/`).
+//! *   **Fuzzing:** `fuzz/fuzz_targets/fuzz_all_modes.rs` exercises encode/decode
+//!     round-trips via `cargo fuzz`.
 
 #![cfg_attr(not(any(feature = "std", test)), no_std)]
 #![doc(issue_tracker_base_url = "https://github.com/hacer-bark/base58-turbo/issues/")]
-#![deny(unsafe_op_in_unsafe_fn)]
-#![warn(missing_debug_implementations, missing_docs, rust_2018_idioms)]
-#![cfg_attr(docsrs, feature(doc_cfg))]
+#![forbid(unsafe_code, elided_lifetimes_in_paths)]
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 // Use `serde` when enabled
 #[cfg(feature = "serde")]
@@ -82,10 +82,14 @@ pub mod serde;
 
 pub mod xmr;
 
-mod decode;
-mod encode;
-use decode::decode_slice_unsafe;
-use encode::encode_slice_unsafe;
+pub mod decode;
+pub mod encode;
+use decode::decode_slice;
+#[cfg(feature = "std")]
+use decode::decode_slice_unbounded;
+use encode::encode_slice;
+#[cfg(feature = "std")]
+use encode::encode_slice_unbounded;
 
 // ======================================================================
 // Errors
@@ -98,7 +102,9 @@ pub enum Error {
     InvalidCharacter,
     /// The output buffer is too small to hold the result.
     BufferTooSmall,
-    /// The input data is too big to process. Limit is 1024 bytes (encode) or 2048 bytes (decode).
+    /// The input data is too big for the zero-allocation `_into` API. Limit is
+    /// 1024 bytes (encode) or 2048 bytes (decode); the allocating [`Engine::encode`]
+    /// / [`Engine::decode`] have no such limit.
     InputTooBig,
     /// The input alphabet has duplicate chars.
     WrongAlphabet,
@@ -107,10 +113,10 @@ pub enum Error {
 impl core::fmt::Display for Error {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Error::InvalidCharacter => write!(f, "invalid character in base58 string"),
-            Error::BufferTooSmall => write!(f, "output buffer too small"),
-            Error::InputTooBig => write!(f, "input data too big"),
-            Error::WrongAlphabet => write!(f, "input alphabet has duplicate chars"),
+            Self::InvalidCharacter => write!(f, "invalid character in base58 string"),
+            Self::BufferTooSmall => write!(f, "output buffer too small"),
+            Self::InputTooBig => write!(f, "input data too big"),
+            Self::WrongAlphabet => write!(f, "input alphabet has duplicate chars"),
         }
     }
 }
@@ -137,13 +143,26 @@ pub struct Config {
 impl Config {
     /// Creates a new configuration from a 58-byte alphabet.
     /// Checks that all characters are unique.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::WrongAlphabet`] if the alphabet contains a non-ASCII byte
+    /// or a duplicate character.
     pub const fn new(alphabet: &[u8; 58]) -> Result<Self, Error> {
         // 1. Generate Decode Map & Check Uniqueness
         let mut map = [255u8; 256];
-        let mut i = 0;
+        let mut i: u8 = 0;
 
-        while i < 58 {
-            let byte = alphabet[i];
+        while (i as usize) < 58 {
+            let byte = alphabet[i as usize];
+
+            // ASCII Check:
+            // `encode` returns a `String`, so the alphabet must be valid UTF-8 on
+            // its own. Rejecting non-ASCII here is what lets that conversion be
+            // infallible.
+            if byte >= 0x80 {
+                return Err(Error::WrongAlphabet);
+            }
 
             // Uniqueness Check:
             // If the map position is not 255, it means we already saw this byte.
@@ -151,7 +170,7 @@ impl Config {
                 return Err(Error::WrongAlphabet);
             }
 
-            map[byte as usize] = i as u8;
+            map[byte as usize] = i;
             i += 1;
         }
 
@@ -193,7 +212,7 @@ impl<'de> ::serde::Deserialize<'de> for Config {
     {
         struct AlphabetVisitor;
 
-        impl<'de> ::serde::de::Visitor<'de> for AlphabetVisitor {
+        impl ::serde::de::Visitor<'_> for AlphabetVisitor {
             type Value = Config;
 
             fn expecting(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -237,7 +256,7 @@ impl<'de> ::serde::Deserialize<'de> for Engine {
     where
         D: ::serde::Deserializer<'de>,
     {
-        Config::deserialize(deserializer).map(|config| Engine { config })
+        Config::deserialize(deserializer).map(|config| Self { config })
     }
 }
 
@@ -296,7 +315,10 @@ const fn gen_lut_squared(alphabet: &[u8; 58]) -> [u16; 3364] {
 
 impl Engine {
     /// Constructs a new Engine with a custom alphabet.
-    /// Returns Error::WrongAlphabet if the alphabet contains duplicates.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::WrongAlphabet`] if the alphabet contains duplicates.
     pub const fn new(alphabet: &[u8; 58]) -> Result<Self, Error> {
         match Config::new(alphabet) {
             Ok(c) => Ok(Self { config: c }),
@@ -305,7 +327,8 @@ impl Engine {
     }
 
     /// Returns the internal configuration.
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub const fn config(&self) -> &Config {
         &self.config
     }
@@ -337,6 +360,11 @@ impl Engine {
 
     /// Encodes `input` into the `output` buffer.
     /// Returns the actual number of bytes written.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InputTooBig`] if `input` exceeds 1024 bytes, or
+    /// [`Error::BufferTooSmall`] if `output` is not large enough.
     #[inline]
     pub fn encode_into<T: AsRef<[u8]>>(&self, input: T, output: &mut [u8]) -> Result<usize, Error> {
         let input = input.as_ref();
@@ -352,17 +380,17 @@ impl Engine {
             return Err(Error::BufferTooSmall);
         }
 
-        // SAFETY:
-        // 1. We checked output has sufficient capacity above.
-        // 2. We assume `encode_slice_unsafe` respects the pointer limits.
-        // 3. We assume `encode_slice_unsafe` uses `self.config` for the alphabet.
-        let actual_len = unsafe { encode_slice_unsafe(input, output.as_mut_ptr(), &self.config) };
-
-        Ok(actual_len)
+        encode_slice(input, output, &self.config)
     }
 
     /// Decodes `input` into the `output` buffer.
     /// Returns the actual number of bytes written.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InputTooBig`] if `input` exceeds 2048 bytes,
+    /// [`Error::BufferTooSmall`] if `output` is not large enough, or
+    /// [`Error::InvalidCharacter`] if `input` contains a character outside the alphabet.
     #[inline]
     pub fn decode_into<T: AsRef<[u8]>>(&self, input: T, output: &mut [u8]) -> Result<usize, Error> {
         let input = input.as_ref();
@@ -381,10 +409,7 @@ impl Engine {
             return Err(Error::BufferTooSmall);
         }
 
-        // SAFETY:
-        // 1. `decode_slice_unsafe` performs bounds checks internally or logic ensures it.
-        // 2. We pass the slice `output` via mutable reference, guaranteeing validity.
-        unsafe { decode_slice_unsafe(input, output, &self.config) }
+        decode_slice(input, output, &self.config)
     }
 
     // ========================================================================
@@ -393,6 +418,16 @@ impl Engine {
 
     /// Encodes `input` into the newly allocated `String`.
     /// Returns the `String`.
+    ///
+    /// Unlike [`Engine::encode_into`], there is no input size limit: inputs that
+    /// exceed the zero-allocation kernel's stack-scratch ceiling fall back to heap
+    /// scratch sized to `input`.
+    ///
+    /// # Errors
+    ///
+    /// This can only fail if the alphabet were internally inconsistent, which
+    /// [`Config::new`] already rejects at construction; the `Result` is kept for
+    /// forward-compatibility.
     #[inline]
     #[cfg(feature = "std")]
     pub fn encode<T: AsRef<[u8]>>(&self, input: T) -> Result<String, Error> {
@@ -400,46 +435,33 @@ impl Engine {
         if input.is_empty() {
             return Ok(String::new());
         }
-        if input.len() > 1024 {
-            return Err(Error::InputTooBig);
-        }
 
         let max_len = self.encoded_len(input.len());
-        let mut out = Vec::with_capacity(max_len);
+        let mut out = vec![0u8; max_len];
 
-        // SAFETY:
-        // We set the length to `max_len` to allow the unsafe kernel to write into the uninitialized capacity.
-        // We MUST successfully overwrite or truncate this before returning.
-        #[allow(clippy::uninit_vec)]
-        unsafe {
-            out.set_len(max_len);
-        }
+        let actual_len = match self.encode_into(input, &mut out) {
+            Ok(n) => n,
+            Err(Error::InputTooBig) => encode_slice_unbounded(input, &mut out, &self.config),
+            Err(e) => return Err(e),
+        };
+        out.truncate(actual_len);
 
-        match self.encode_into(input, &mut out) {
-            Ok(actual_len) => {
-                // SAFETY: The kernel reported `actual_len` bytes were written.
-                // Truncate the vector to remove the remaining uninitialized tail.
-                unsafe {
-                    out.set_len(actual_len);
-                }
-
-                // SAFETY: Base58 is always valid ASCII, which is valid UTF-8.
-                unsafe { Ok(String::from_utf8_unchecked(out)) }
-            }
-            Err(_) => {
-                // This branch should technically be unreachable if `encoded_len` is correct
-                // and `Vec::with_capacity` succeeded.
-                // Prevent returning uninitialized memory if logic fails.
-                unsafe {
-                    out.set_len(0);
-                }
-                panic!("Base58 encoding failed due to insufficient buffer (logic error).");
-            }
-        }
+        // `Config::new` rejects non-ASCII alphabets, so the output is ASCII and
+        // this conversion always succeeds; the error path is unreachable.
+        String::from_utf8(out).map_err(|_| Error::WrongAlphabet)
     }
 
     /// Decodes `input` into the newly allocated `Vec<u8>`.
     /// Returns the `Vec<u8>`.
+    ///
+    /// Unlike [`Engine::decode_into`], there is no input size limit: inputs that
+    /// exceed the zero-allocation kernel's stack-scratch ceiling (either in encoded
+    /// length or decoded length) fall back to heap scratch sized to `input`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidCharacter`] if `input` contains a character outside
+    /// the alphabet.
     #[inline]
     #[cfg(feature = "std")]
     pub fn decode<T: AsRef<[u8]>>(&self, input: T) -> Result<Vec<u8>, Error> {
@@ -447,69 +469,16 @@ impl Engine {
         if input.is_empty() {
             return Ok(Vec::new());
         }
-        if input.len() > 2048 {
-            return Err(Error::InputTooBig);
-        }
 
         let max_len = self.decoded_len(input.len());
-        let mut out = Vec::with_capacity(max_len);
+        let mut out = vec![0u8; max_len];
 
-        // SAFETY: Expose uninitialized buffer to the decoder.
-        #[allow(clippy::uninit_vec)]
-        unsafe {
-            out.set_len(max_len);
-        }
-
-        match self.decode_into(input, &mut out) {
-            Ok(actual_len) => {
-                // SAFETY: Success. Truncate to actual size.
-                unsafe {
-                    out.set_len(actual_len);
-                }
-                Ok(out)
-            }
-            Err(e) => {
-                // SAFETY: Failure. Clear length to prevent access to junk data.
-                unsafe {
-                    out.set_len(0);
-                }
-                Err(e)
-            }
-        }
-    }
-}
-
-#[cfg(all(test, miri))]
-mod lib_miri_coverage {
-    use super::*;
-
-    #[test]
-    fn miri_engine_lifecycle() {
-        let alphabet = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-        let engine = Engine::new(alphabet).unwrap();
-
-        let data = b"Miri Test Data";
-        let encoded = engine.encode(data).unwrap();
-        let decoded = engine.decode(&encoded).unwrap();
-
-        assert_eq!(data, decoded.as_slice());
-    }
-
-    #[test]
-    fn miri_all_predefined_engines() {
-        let engines = [BITCOIN, MONERO, RIPPLE, FLICKR];
-        let data = b"test";
-        for engine in engines {
-            let encoded = engine.encode(data).unwrap();
-            let decoded = engine.decode(&encoded).unwrap();
-            assert_eq!(data, decoded.as_slice());
-        }
-    }
-
-    #[test]
-    fn miri_config_errors() {
-        let alphabet = [b'a'; 58];
-        // Duplicate chars should fail
-        assert!(Config::new(&alphabet).is_err());
+        let actual_len = match self.decode_into(input, &mut out) {
+            Ok(n) => n,
+            Err(Error::InputTooBig) => decode_slice_unbounded(input, &mut out, &self.config)?,
+            Err(e) => return Err(e),
+        };
+        out.truncate(actual_len);
+        Ok(out)
     }
 }

@@ -1,16 +1,31 @@
+#![allow(
+    missing_docs,
+    missing_debug_implementations,
+    unreachable_pub,
+    clippy::all,
+    clippy::pedantic,
+    clippy::nursery,
+    clippy::cargo,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::todo,
+    clippy::unimplemented
+)]
+
 use criterion::{
-    criterion_group, criterion_main, AxisScale, BenchmarkId, Criterion,
-    PlotConfiguration, Throughput,
+    AxisScale, BenchmarkId, Criterion, PlotConfiguration, Throughput, criterion_group,
+    criterion_main,
 };
-use std::hint::black_box;
 use rand::RngExt;
 use std::env;
+use std::hint::black_box;
 use std::time::Duration;
 
 // 1. Turbo code
 use base58_turbo::*;
 // 2. The bs58
-use bs58::{encode as encode_std, decode as decode_std, Alphabet as AlphabetStd};
+use bs58::{Alphabet as AlphabetStd, decode as decode_std, encode as encode_std};
 // 3. The base58
 use base58::{FromBase58, ToBase58};
 // 4. The five8
@@ -45,7 +60,7 @@ fn bench_comparison(c: &mut Criterion) {
     group.noise_threshold(0.05);
     group.sample_size(50);
 
-    let sizes = [16, 24, 25, 32, 48, 64, 69, 128];
+    let sizes = [16, 32, 48, 64, 128, 512];
 
     for size in sizes.iter() {
         let input_data = generate_random_data(*size);
@@ -57,121 +72,172 @@ fn bench_comparison(c: &mut Criterion) {
 
         // 1. Base58 Turbo (Allocating)
         if should_run("turbo") {
-            group.bench_with_input(BenchmarkId::new("Encode/Turbo", size), &input_data, |b, d| {
-                b.iter(|| BITCOIN.encode(black_box(d)).unwrap())
-            });
+            group.bench_with_input(
+                BenchmarkId::new("Encode/Turbo", size),
+                &input_data,
+                |b, d| b.iter(|| BITCOIN.encode(black_box(d)).unwrap()),
+            );
         }
 
         // 2. bs58 Standard
-        if should_run("bs58")  {
-            group.bench_with_input(BenchmarkId::new("Encode/bs58", size), &input_data, |b, d| {
-                b.iter(|| encode_std(black_box(d)).with_alphabet(black_box(AlphabetStd::BITCOIN)).into_string())
-            });
+        if should_run("bs58") {
+            group.bench_with_input(
+                BenchmarkId::new("Encode/bs58", size),
+                &input_data,
+                |b, d| {
+                    b.iter(|| {
+                        encode_std(black_box(d))
+                            .with_alphabet(black_box(AlphabetStd::BITCOIN))
+                            .into_string()
+                    })
+                },
+            );
         }
 
         // 3. Base58 Classic
         if should_run("base58") {
-            group.bench_with_input(BenchmarkId::new("Encode/base58", size), &input_data, |b, d| {
-                b.iter(|| black_box(d).to_base58())
-            });
+            group.bench_with_input(
+                BenchmarkId::new("Encode/base58", size),
+                &input_data,
+                |b, d| b.iter(|| black_box(d).to_base58()),
+            );
         }
 
         // 4a. five8-32 "non-general code"
         if should_run("five8") && *size == 32 {
-            group.bench_with_input(BenchmarkId::new("Encode/five8", size), &input_data, |b, d| {
-                b.iter(|| {
-                    let mut buffer = [0u8; 44];
-                    let static_bytes: [u8; 32] = d.as_slice().try_into().unwrap();
-                    encode_32(&black_box(static_bytes), &mut buffer);
+            group.bench_with_input(
+                BenchmarkId::new("Encode/five8", size),
+                &input_data,
+                |b, d| {
+                    b.iter(|| {
+                        let mut buffer = [0u8; 44];
+                        let static_bytes: [u8; 32] = d.as_slice().try_into().unwrap();
+                        encode_32(&black_box(static_bytes), &mut buffer);
 
-                    black_box(buffer);
-                })
-            });
+                        black_box(buffer);
+                    })
+                },
+            );
         }
 
         // 4b. five8-64 "non-general code"
         if should_run("five8") && *size == 64 {
-            group.bench_with_input(BenchmarkId::new("Encode/five8", size), &input_data, |b, d| {
-                b.iter(|| {
-                    let mut buffer = [0u8; 88];
-                    let static_bytes: [u8; 64] = d.as_slice().try_into().unwrap();
-                    encode_64(&black_box(static_bytes), &mut buffer);
+            group.bench_with_input(
+                BenchmarkId::new("Encode/five8", size),
+                &input_data,
+                |b, d| {
+                    b.iter(|| {
+                        let mut buffer = [0u8; 88];
+                        let static_bytes: [u8; 64] = d.as_slice().try_into().unwrap();
+                        encode_64(&black_box(static_bytes), &mut buffer);
 
-                    black_box(buffer);
-                })
-            });
+                        black_box(buffer);
+                    })
+                },
+            );
         }
 
         // 5. XMR Turbo vs base58-monero
         if should_run("xmr") || should_run("all") {
-            group.bench_with_input(BenchmarkId::new("Encode/Turbo_XMR", size), &input_data, |b, d| {
-                b.iter(|| base58_turbo::xmr::encode(black_box(d)).unwrap())
-            });
-            group.bench_with_input(BenchmarkId::new("Encode/base58_monero", size), &input_data, |b, d| {
-                b.iter(|| base58_xmr::encode(black_box(d)).unwrap())
-            });
+            group.bench_with_input(
+                BenchmarkId::new("Encode/Turbo_XMR", size),
+                &input_data,
+                |b, d| b.iter(|| base58_turbo::xmr::encode(black_box(d)).unwrap()),
+            );
+            group.bench_with_input(
+                BenchmarkId::new("Encode/base58_monero", size),
+                &input_data,
+                |b, d| b.iter(|| base58_xmr::encode(black_box(d)).unwrap()),
+            );
         }
 
         // ======================================================================
         // DECODE
         // ======================================================================
-        let encoded_str = encode_std(&input_data).with_alphabet(black_box(AlphabetStd::BITCOIN)).into_string();
+        let encoded_str = encode_std(&input_data)
+            .with_alphabet(black_box(AlphabetStd::BITCOIN))
+            .into_string();
         group.throughput(Throughput::Bytes(encoded_str.len() as u64));
 
         // 1. Base58 Turbo (Allocating)
         if should_run("turbo") {
-            group.bench_with_input(BenchmarkId::new("Decode/Turbo", size), encoded_str.as_bytes(), |b, d| {
-                b.iter(|| BITCOIN.decode(black_box(d)).unwrap())
-            });
+            group.bench_with_input(
+                BenchmarkId::new("Decode/Turbo", size),
+                encoded_str.as_bytes(),
+                |b, d| b.iter(|| BITCOIN.decode(black_box(d)).unwrap()),
+            );
         }
 
         // 2. bs58 Standard
-        if should_run("bs58")  {
-            group.bench_with_input(BenchmarkId::new("Decode/bs58", size), &encoded_str, |b, d| {
-                b.iter(|| decode_std(black_box(d)).with_alphabet(black_box(AlphabetStd::BITCOIN)).into_vec().unwrap())
-            });
+        if should_run("bs58") {
+            group.bench_with_input(
+                BenchmarkId::new("Decode/bs58", size),
+                &encoded_str,
+                |b, d| {
+                    b.iter(|| {
+                        decode_std(black_box(d))
+                            .with_alphabet(black_box(AlphabetStd::BITCOIN))
+                            .into_vec()
+                            .unwrap()
+                    })
+                },
+            );
         }
 
         // 3. Base58 Classic
         if should_run("base58") {
-            group.bench_with_input(BenchmarkId::new("Decode/base58", size), &encoded_str, |b, d| {
-                b.iter(|| black_box(d).from_base58().unwrap())
-            });
+            group.bench_with_input(
+                BenchmarkId::new("Decode/base58", size),
+                &encoded_str,
+                |b, d| b.iter(|| black_box(d).from_base58().unwrap()),
+            );
         }
 
         // 4a. five8-32 "non-general code"
         if should_run("five8") && *size == 32 {
-            group.bench_with_input(BenchmarkId::new("Decode/five8", size), &encoded_str, |b, d| {
-                b.iter(|| {
-                    let mut buffer = [0u8; 32];
-                    decode_32(&black_box(d), &mut buffer).unwrap();
+            group.bench_with_input(
+                BenchmarkId::new("Decode/five8", size),
+                &encoded_str,
+                |b, d| {
+                    b.iter(|| {
+                        let mut buffer = [0u8; 32];
+                        decode_32(black_box(d), &mut buffer).unwrap();
 
-                    black_box(buffer);
-                })
-            });
+                        black_box(buffer);
+                    })
+                },
+            );
         }
 
         // 4b. five8-64 "non-general code"
         if should_run("five8") && *size == 64 {
-            group.bench_with_input(BenchmarkId::new("Decode/five8", size), &encoded_str, |b, d| {
-                b.iter(|| {
-                    let mut buffer = [0u8; 64];
-                    decode_64(&black_box(d), &mut buffer).unwrap();
+            group.bench_with_input(
+                BenchmarkId::new("Decode/five8", size),
+                &encoded_str,
+                |b, d| {
+                    b.iter(|| {
+                        let mut buffer = [0u8; 64];
+                        decode_64(black_box(d), &mut buffer).unwrap();
 
-                    black_box(buffer);
-                })
-            });
+                        black_box(buffer);
+                    })
+                },
+            );
         }
 
         // 5. XMR Turbo vs base58-monero
         if should_run("xmr") || should_run("all") {
             let encoded_xmr = base58_turbo::xmr::encode(&input_data).unwrap();
-            group.bench_with_input(BenchmarkId::new("Decode/Turbo_XMR", size), &encoded_xmr, |b, d| {
-                b.iter(|| base58_turbo::xmr::decode(black_box(d)).unwrap())
-            });
-            group.bench_with_input(BenchmarkId::new("Decode/base58_monero", size), &encoded_xmr, |b, d| {
-                b.iter(|| base58_xmr::decode(black_box(d)).unwrap())
-            });
+            group.bench_with_input(
+                BenchmarkId::new("Decode/Turbo_XMR", size),
+                &encoded_xmr,
+                |b, d| b.iter(|| base58_turbo::xmr::decode(black_box(d)).unwrap()),
+            );
+            group.bench_with_input(
+                BenchmarkId::new("Decode/base58_monero", size),
+                &encoded_xmr,
+                |b, d| b.iter(|| base58_xmr::decode(black_box(d)).unwrap()),
+            );
         }
     }
 

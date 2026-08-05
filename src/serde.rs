@@ -21,7 +21,7 @@
 //! ## Support for Fixed-Size Arrays
 //!
 //! For fixed-length binary data like public keys, hashes, or seeds,
-//! use the specialized modules: `base58_24`, `base58_32`, `base58_48`, or `base58_64`.
+//! use the specialized modules: [`base58_24`], [`base58_32`], [`base58_48`], or [`base58_64`].
 //!
 //! These enforce **exact length** during deserialization, failing with a descriptive error
 //! if the decoded data isn't precisely the expected size.
@@ -50,9 +50,9 @@
 //! }
 //! ```
 //!
-//! Works with **any** Serde format (JSON, YAML, TOML, MessagePack, Bincode, Postcard…).
+//! Works with **any** Serde format (JSON, YAML, TOML, `MessagePack`, Bincode, Postcard…).
 
-use serde::{de, Deserializer, Serializer};
+use serde::{Deserializer, Serializer, de};
 
 use crate::BITCOIN;
 
@@ -61,7 +61,7 @@ use crate::BITCOIN;
 /// This submodule provides Serde helper functions that convert binary data
 /// to/from Base58 strings using the universal `BITCOIN` alphabet.
 pub mod base58 {
-    use super::*;
+    use super::{BITCOIN, Deserializer, Serializer, de};
 
     /// Serializes any byte container as a Base58 string.
     ///
@@ -77,13 +77,20 @@ pub mod base58 {
     ///
     /// ## Performance
     ///
-    /// Uses the highly-optimized scalar path of `base58-turbo`.
+    /// Uses the highly-optimized scalar path of `base58-turbo`. There is no length
+    /// limit on `value`.
+    ///
+    /// # Errors
+    ///
+    /// Propagates `serializer`'s error if it rejects the encoded string.
     pub fn serialize<T, S>(value: &T, serializer: S) -> Result<S::Ok, S::Error>
     where
         T: AsRef<[u8]>,
         S: Serializer,
     {
-        let encoded = BITCOIN.encode(value.as_ref()).map_err(serde::ser::Error::custom)?;
+        let encoded = BITCOIN
+            .encode(value.as_ref())
+            .map_err(serde::ser::Error::custom)?;
         serializer.serialize_str(&encoded)
     }
 
@@ -97,22 +104,23 @@ pub mod base58 {
     ///
     /// ## Error handling
     ///
-    /// Returns a clear Serde error with a helpful message when:
-    /// - An invalid Base58 character is found
-    /// - The input is too large (over 2048 bytes)
+    /// Returns a clear Serde error with a helpful message if an invalid Base58
+    /// character is found. There is no length limit on the input.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `deserializer` does not yield a valid Base58 string.
     pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
     where
         D: Deserializer<'de>,
     {
         struct Base58Visitor;
 
-        impl<'de> de::Visitor<'de> for Base58Visitor {
+        impl de::Visitor<'_> for Base58Visitor {
             type Value = Vec<u8>;
 
             fn expecting(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-                formatter.write_str(
-                    "a valid Base58 string"
-                )
+                formatter.write_str("a valid Base58 string")
             }
 
             fn visit_str<E>(self, value: &str) -> Result<Vec<u8>, E>
@@ -143,9 +151,13 @@ pub mod base58 {
 
 /// **Universal** Base58 for fixed-size `[u8; 24]`.
 pub mod base58_24 {
-    use super::*;
+    use super::{BITCOIN, Deserializer, Serializer, de};
 
     /// Serializes a 24-byte container as a Base58 string.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `value` is not exactly 24 bytes.
     pub fn serialize<T, S>(value: &T, serializer: S) -> Result<S::Ok, S::Error>
     where
         T: AsRef<[u8]>,
@@ -153,7 +165,10 @@ pub mod base58_24 {
     {
         let bytes = value.as_ref();
         if bytes.len() != 24 {
-            return Err(serde::ser::Error::custom(format!("expected 24 bytes, got {}", bytes.len())));
+            return Err(serde::ser::Error::custom(format!(
+                "expected 24 bytes, got {}",
+                bytes.len()
+            )));
         }
         let encoded = BITCOIN.encode(bytes).map_err(serde::ser::Error::custom)?;
         serializer.serialize_str(&encoded)
@@ -162,13 +177,17 @@ pub mod base58_24 {
     /// Deserializes a Base58 string into exactly `[u8; 24]`.
     ///
     /// Fails if the decoded data is not precisely 24 bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `deserializer` does not yield a valid Base58 string decoding to exactly 24 bytes.
     pub fn deserialize<'de, D>(deserializer: D) -> Result<[u8; 24], D::Error>
     where
         D: Deserializer<'de>,
     {
         struct Base58Visitor;
 
-        impl<'de> de::Visitor<'de> for Base58Visitor {
+        impl de::Visitor<'_> for Base58Visitor {
             type Value = [u8; 24];
 
             fn expecting(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -181,9 +200,13 @@ pub mod base58_24 {
             {
                 let vec = BITCOIN.decode(value).map_err(de::Error::custom)?;
                 if vec.len() != 24 {
-                    return Err(de::Error::custom(format!("expected 24 bytes, got {}", vec.len())));
+                    return Err(de::Error::custom(format!(
+                        "expected 24 bytes, got {}",
+                        vec.len()
+                    )));
                 }
-                Ok(vec.try_into().expect("length already checked"))
+                vec.try_into()
+                    .map_err(|_| de::Error::custom("length already checked"))
             }
 
             fn visit_string<E>(self, value: String) -> Result<[u8; 24], E>
@@ -199,9 +222,13 @@ pub mod base58_24 {
             {
                 let vec = BITCOIN.decode(value).map_err(de::Error::custom)?;
                 if vec.len() != 24 {
-                    return Err(de::Error::custom(format!("expected 24 bytes, got {}", vec.len())));
+                    return Err(de::Error::custom(format!(
+                        "expected 24 bytes, got {}",
+                        vec.len()
+                    )));
                 }
-                Ok(vec.try_into().expect("length already checked"))
+                vec.try_into()
+                    .map_err(|_| de::Error::custom("length already checked"))
             }
         }
 
@@ -211,9 +238,13 @@ pub mod base58_24 {
 
 /// **Universal** Base58 for fixed-size `[u8; 32]`.
 pub mod base58_32 {
-    use super::*;
+    use super::{BITCOIN, Deserializer, Serializer, de};
 
     /// Serializes a 32-byte container as a Base58 string.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `value` is not exactly 32 bytes.
     pub fn serialize<T, S>(value: &T, serializer: S) -> Result<S::Ok, S::Error>
     where
         T: AsRef<[u8]>,
@@ -221,7 +252,10 @@ pub mod base58_32 {
     {
         let bytes = value.as_ref();
         if bytes.len() != 32 {
-            return Err(serde::ser::Error::custom(format!("expected 32 bytes, got {}", bytes.len())));
+            return Err(serde::ser::Error::custom(format!(
+                "expected 32 bytes, got {}",
+                bytes.len()
+            )));
         }
         let encoded = BITCOIN.encode(bytes).map_err(serde::ser::Error::custom)?;
         serializer.serialize_str(&encoded)
@@ -230,13 +264,17 @@ pub mod base58_32 {
     /// Deserializes a Base58 string into exactly `[u8; 32]`.
     ///
     /// Fails if the decoded data is not precisely 32 bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `deserializer` does not yield a valid Base58 string decoding to exactly 32 bytes.
     pub fn deserialize<'de, D>(deserializer: D) -> Result<[u8; 32], D::Error>
     where
         D: Deserializer<'de>,
     {
         struct Base58Visitor;
 
-        impl<'de> de::Visitor<'de> for Base58Visitor {
+        impl de::Visitor<'_> for Base58Visitor {
             type Value = [u8; 32];
 
             fn expecting(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -249,9 +287,13 @@ pub mod base58_32 {
             {
                 let vec = BITCOIN.decode(value).map_err(de::Error::custom)?;
                 if vec.len() != 32 {
-                    return Err(de::Error::custom(format!("expected 32 bytes, got {}", vec.len())));
+                    return Err(de::Error::custom(format!(
+                        "expected 32 bytes, got {}",
+                        vec.len()
+                    )));
                 }
-                Ok(vec.try_into().expect("length already checked"))
+                vec.try_into()
+                    .map_err(|_| de::Error::custom("length already checked"))
             }
 
             fn visit_string<E>(self, value: String) -> Result<[u8; 32], E>
@@ -267,9 +309,13 @@ pub mod base58_32 {
             {
                 let vec = BITCOIN.decode(value).map_err(de::Error::custom)?;
                 if vec.len() != 32 {
-                    return Err(de::Error::custom(format!("expected 32 bytes, got {}", vec.len())));
+                    return Err(de::Error::custom(format!(
+                        "expected 32 bytes, got {}",
+                        vec.len()
+                    )));
                 }
-                Ok(vec.try_into().expect("length already checked"))
+                vec.try_into()
+                    .map_err(|_| de::Error::custom("length already checked"))
             }
         }
 
@@ -279,9 +325,13 @@ pub mod base58_32 {
 
 /// **Universal** Base58 for fixed-size `[u8; 48]`.
 pub mod base58_48 {
-    use super::*;
+    use super::{BITCOIN, Deserializer, Serializer, de};
 
     /// Serializes a 48-byte container as a Base58 string.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `value` is not exactly 48 bytes.
     pub fn serialize<T, S>(value: &T, serializer: S) -> Result<S::Ok, S::Error>
     where
         T: AsRef<[u8]>,
@@ -289,7 +339,10 @@ pub mod base58_48 {
     {
         let bytes = value.as_ref();
         if bytes.len() != 48 {
-            return Err(serde::ser::Error::custom(format!("expected 48 bytes, got {}", bytes.len())));
+            return Err(serde::ser::Error::custom(format!(
+                "expected 48 bytes, got {}",
+                bytes.len()
+            )));
         }
         let encoded = BITCOIN.encode(bytes).map_err(serde::ser::Error::custom)?;
         serializer.serialize_str(&encoded)
@@ -298,13 +351,17 @@ pub mod base58_48 {
     /// Deserializes a Base58 string into exactly `[u8; 48]`.
     ///
     /// Fails if the decoded data is not precisely 48 bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `deserializer` does not yield a valid Base58 string decoding to exactly 48 bytes.
     pub fn deserialize<'de, D>(deserializer: D) -> Result<[u8; 48], D::Error>
     where
         D: Deserializer<'de>,
     {
         struct Base58Visitor;
 
-        impl<'de> de::Visitor<'de> for Base58Visitor {
+        impl de::Visitor<'_> for Base58Visitor {
             type Value = [u8; 48];
 
             fn expecting(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -317,9 +374,13 @@ pub mod base58_48 {
             {
                 let vec = BITCOIN.decode(value).map_err(de::Error::custom)?;
                 if vec.len() != 48 {
-                    return Err(de::Error::custom(format!("expected 48 bytes, got {}", vec.len())));
+                    return Err(de::Error::custom(format!(
+                        "expected 48 bytes, got {}",
+                        vec.len()
+                    )));
                 }
-                Ok(vec.try_into().expect("length already checked"))
+                vec.try_into()
+                    .map_err(|_| de::Error::custom("length already checked"))
             }
 
             fn visit_string<E>(self, value: String) -> Result<[u8; 48], E>
@@ -335,9 +396,13 @@ pub mod base58_48 {
             {
                 let vec = BITCOIN.decode(value).map_err(de::Error::custom)?;
                 if vec.len() != 48 {
-                    return Err(de::Error::custom(format!("expected 48 bytes, got {}", vec.len())));
+                    return Err(de::Error::custom(format!(
+                        "expected 48 bytes, got {}",
+                        vec.len()
+                    )));
                 }
-                Ok(vec.try_into().expect("length already checked"))
+                vec.try_into()
+                    .map_err(|_| de::Error::custom("length already checked"))
             }
         }
 
@@ -347,9 +412,13 @@ pub mod base58_48 {
 
 /// **Universal** Base58 for fixed-size `[u8; 64]`.
 pub mod base58_64 {
-    use super::*;
+    use super::{BITCOIN, Deserializer, Serializer, de};
 
     /// Serializes a 64-byte container as a Base58 string.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `value` is not exactly 64 bytes.
     pub fn serialize<T, S>(value: &T, serializer: S) -> Result<S::Ok, S::Error>
     where
         T: AsRef<[u8]>,
@@ -357,7 +426,10 @@ pub mod base58_64 {
     {
         let bytes = value.as_ref();
         if bytes.len() != 64 {
-            return Err(serde::ser::Error::custom(format!("expected 64 bytes, got {}", bytes.len())));
+            return Err(serde::ser::Error::custom(format!(
+                "expected 64 bytes, got {}",
+                bytes.len()
+            )));
         }
         let encoded = BITCOIN.encode(bytes).map_err(serde::ser::Error::custom)?;
         serializer.serialize_str(&encoded)
@@ -366,13 +438,17 @@ pub mod base58_64 {
     /// Deserializes a Base58 string into exactly `[u8; 64]`.
     ///
     /// Fails if the decoded data is not precisely 64 bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `deserializer` does not yield a valid Base58 string decoding to exactly 64 bytes.
     pub fn deserialize<'de, D>(deserializer: D) -> Result<[u8; 64], D::Error>
     where
         D: Deserializer<'de>,
     {
         struct Base58Visitor;
 
-        impl<'de> de::Visitor<'de> for Base58Visitor {
+        impl de::Visitor<'_> for Base58Visitor {
             type Value = [u8; 64];
 
             fn expecting(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -385,9 +461,13 @@ pub mod base58_64 {
             {
                 let vec = BITCOIN.decode(value).map_err(de::Error::custom)?;
                 if vec.len() != 64 {
-                    return Err(de::Error::custom(format!("expected 64 bytes, got {}", vec.len())));
+                    return Err(de::Error::custom(format!(
+                        "expected 64 bytes, got {}",
+                        vec.len()
+                    )));
                 }
-                Ok(vec.try_into().expect("length already checked"))
+                vec.try_into()
+                    .map_err(|_| de::Error::custom("length already checked"))
             }
 
             fn visit_string<E>(self, value: String) -> Result<[u8; 64], E>
@@ -403,9 +483,13 @@ pub mod base58_64 {
             {
                 let vec = BITCOIN.decode(value).map_err(de::Error::custom)?;
                 if vec.len() != 64 {
-                    return Err(de::Error::custom(format!("expected 64 bytes, got {}", vec.len())));
+                    return Err(de::Error::custom(format!(
+                        "expected 64 bytes, got {}",
+                        vec.len()
+                    )));
                 }
-                Ok(vec.try_into().expect("length already checked"))
+                vec.try_into()
+                    .map_err(|_| de::Error::custom("length already checked"))
             }
         }
 
@@ -415,9 +499,22 @@ pub mod base58_64 {
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::all,
+        clippy::pedantic,
+        clippy::nursery,
+        clippy::cargo,
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic
+    )]
+
     use super::*;
+    use serde::de::{
+        IntoDeserializer,
+        value::{BytesDeserializer, Error as ValueError, StringDeserializer},
+    };
     use serde::{Deserialize, Serialize};
-    use serde::de::{IntoDeserializer, value::{StringDeserializer, BytesDeserializer, Error as ValueError}};
 
     // ======================================================================
     // Test Structs
@@ -430,18 +527,46 @@ mod tests {
     }
 
     #[derive(Debug, PartialEq, Serialize, Deserialize)]
-    struct Fixed24Payload { #[serde(with = "base58_24")] data: [u8; 24], }
+    struct Fixed24Payload {
+        #[serde(with = "base58_24")]
+        data: [u8; 24],
+    }
     #[derive(Debug, PartialEq, Serialize, Deserialize)]
-    struct Fixed32Payload { #[serde(with = "base58_32")] data: [u8; 32], }
+    struct Fixed32Payload {
+        #[serde(with = "base58_32")]
+        data: [u8; 32],
+    }
     #[derive(Debug, PartialEq, Serialize, Deserialize)]
-    struct Fixed48Payload { #[serde(with = "base58_48")] data: [u8; 48], }
+    struct Fixed48Payload {
+        #[serde(with = "base58_48")]
+        data: [u8; 48],
+    }
     #[derive(Debug, PartialEq, Serialize, Deserialize)]
-    struct Fixed64Payload { #[serde(with = "base58_64")] data: [u8; 64], }
+    struct Fixed64Payload {
+        #[serde(with = "base58_64")]
+        data: [u8; 64],
+    }
 
-    #[derive(Debug, Serialize)] struct Dyn24<'a> { #[serde(with = "base58_24")] data: &'a [u8], }
-    #[derive(Debug, Serialize)] struct Dyn32<'a> { #[serde(with = "base58_32")] data: &'a [u8], }
-    #[derive(Debug, Serialize)] struct Dyn48<'a> { #[serde(with = "base58_48")] data: &'a [u8], }
-    #[derive(Debug, Serialize)] struct Dyn64<'a> { #[serde(with = "base58_64")] data: &'a [u8], }
+    #[derive(Debug, Serialize)]
+    struct Dyn24<'a> {
+        #[serde(with = "base58_24")]
+        data: &'a [u8],
+    }
+    #[derive(Debug, Serialize)]
+    struct Dyn32<'a> {
+        #[serde(with = "base58_32")]
+        data: &'a [u8],
+    }
+    #[derive(Debug, Serialize)]
+    struct Dyn48<'a> {
+        #[serde(with = "base58_48")]
+        data: &'a [u8],
+    }
+    #[derive(Debug, Serialize)]
+    struct Dyn64<'a> {
+        #[serde(with = "base58_64")]
+        data: &'a [u8],
+    }
 
     // ======================================================================
     // 1. Variable Length Tests
@@ -449,22 +574,31 @@ mod tests {
 
     #[test]
     fn test_var_len_success() {
-        let payload = VarLenPayload { data: b"Hello World".to_vec() };
+        let payload = VarLenPayload {
+            data: b"Hello World".to_vec(),
+        };
         let serialized = serde_json::to_string(&payload).unwrap();
         assert_eq!(serialized, r#"{"data":"JxF12TrwUP45BMd"}"#);
         assert_eq!(payload, serde_json::from_str(&serialized).unwrap());
     }
 
     #[test]
-    fn test_var_len_serialization_size_limit() {
-        let payload = VarLenPayload { data: vec![0u8; 1025] };
-        assert!(serde_json::to_string(&payload).is_err());
+    fn test_var_len_serialization_has_no_size_limit() {
+        let payload = VarLenPayload {
+            data: vec![0xABu8; 5_000],
+        };
+        let serialized = serde_json::to_string(&payload).unwrap();
+        assert_eq!(payload, serde_json::from_str(&serialized).unwrap());
     }
 
     #[test]
     fn test_var_len_wrong_type_expecting() {
         let res: Result<VarLenPayload, _> = serde_json::from_str(r#"{"data":123}"#);
-        assert!(res.unwrap_err().to_string().contains("a valid Base58 string"));
+        assert!(
+            res.unwrap_err()
+                .to_string()
+                .contains("a valid Base58 string")
+        );
     }
 
     // ======================================================================
@@ -497,12 +631,13 @@ mod tests {
             // Success Paths
             let de_s: StringDeserializer<ValueError> = valid_str.clone().into_deserializer();
             assert!($module::deserialize(de_s).is_ok());
-            
+
             let de_b: BytesDeserializer<'_, ValueError> = valid_str.as_bytes().into_deserializer();
             assert!($module::deserialize(de_b).is_ok());
 
             // Error Paths: Length
-            let de_bad_s: StringDeserializer<ValueError> = wrong_len_str.clone().into_deserializer();
+            let de_bad_s: StringDeserializer<ValueError> =
+                wrong_len_str.clone().into_deserializer();
             assert!($module::deserialize(de_bad_s).is_err());
 
             // Error Paths: Invalid Chars

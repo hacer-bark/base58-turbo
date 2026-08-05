@@ -53,6 +53,11 @@ pub const fn decoded_len(input_len: usize) -> Option<usize> {
 
 /// Encodes a slice of bytes into a Monero Base58 string into the provided buffer.
 /// Returns the number of bytes written.
+///
+/// # Errors
+///
+/// Returns [`Error::BufferTooSmall`] if `output` is not large enough, or an error
+/// from the underlying per-chunk [`MONERO`] encoder.
 pub fn encode_into<T: AsRef<[u8]>>(input: T, output: &mut [u8]) -> Result<usize, Error> {
     let input = input.as_ref();
     if input.is_empty() {
@@ -90,6 +95,12 @@ pub fn encode_into<T: AsRef<[u8]>>(input: T, output: &mut [u8]) -> Result<usize,
 
 /// Decodes a Monero Base58 string into the provided buffer.
 /// Returns the number of bytes written.
+///
+/// # Errors
+///
+/// Returns [`Error::InvalidCharacter`] if `input` has an invalid chunk length or
+/// contains a character outside the alphabet, or [`Error::BufferTooSmall`] if
+/// `output` is not large enough.
 pub fn decode_into<T: AsRef<[u8]>>(input: T, output: &mut [u8]) -> Result<usize, Error> {
     let input = input.as_ref();
     if input.is_empty() {
@@ -148,6 +159,10 @@ pub fn decode_into<T: AsRef<[u8]>>(input: T, output: &mut [u8]) -> Result<usize,
 }
 
 /// Encodes `input` into a newly allocated Monero Base58 `String`.
+///
+/// # Errors
+///
+/// Returns an error from the underlying [`encode_into`].
 #[cfg(feature = "std")]
 pub fn encode<T: AsRef<[u8]>>(input: T) -> Result<String, Error> {
     let input = input.as_ref();
@@ -156,26 +171,22 @@ pub fn encode<T: AsRef<[u8]>>(input: T) -> Result<String, Error> {
     }
 
     let expected_len = encoded_len(input.len());
-    let mut out = Vec::with_capacity(expected_len);
+    let mut out = vec![0u8; expected_len];
 
-    #[allow(clippy::uninit_vec)]
-    unsafe {
-        out.set_len(expected_len);
-    }
+    let actual_len = encode_into(input, &mut out)?;
+    out.truncate(actual_len);
 
-    match encode_into(input, &mut out) {
-        Ok(actual_len) => {
-            unsafe { out.set_len(actual_len); }
-            unsafe { Ok(String::from_utf8_unchecked(out)) }
-        }
-        Err(e) => {
-            unsafe { out.set_len(0); }
-            Err(e)
-        }
-    }
+    // The Monero alphabet is ASCII, so this conversion always succeeds; the
+    // error path is unreachable.
+    String::from_utf8(out).map_err(|_| Error::WrongAlphabet)
 }
 
 /// Decodes `input` Monero Base58 string into a newly allocated `Vec<u8>`.
+///
+/// # Errors
+///
+/// Returns [`Error::InvalidCharacter`] if `input` has an invalid length, or an
+/// error from the underlying [`decode_into`].
 #[cfg(feature = "std")]
 pub fn decode<T: AsRef<[u8]>>(input: T) -> Result<Vec<u8>, Error> {
     let input = input.as_ref();
@@ -184,21 +195,9 @@ pub fn decode<T: AsRef<[u8]>>(input: T) -> Result<Vec<u8>, Error> {
     }
 
     let expected_len = decoded_len(input.len()).ok_or(Error::InvalidCharacter)?;
-    let mut out = Vec::with_capacity(expected_len);
+    let mut out = vec![0u8; expected_len];
 
-    #[allow(clippy::uninit_vec)]
-    unsafe {
-        out.set_len(expected_len);
-    }
-
-    match decode_into(input, &mut out) {
-        Ok(actual_len) => {
-            unsafe { out.set_len(actual_len); }
-            Ok(out)
-        }
-        Err(e) => {
-            unsafe { out.set_len(0); }
-            Err(e)
-        }
-    }
+    let actual_len = decode_into(input, &mut out)?;
+    out.truncate(actual_len);
+    Ok(out)
 }

@@ -1,103 +1,115 @@
-name: Logic & Security Tests
+name: CI
 
 on:
   push:
-    branches: [ "main" ]
-    tags-ignore:
-      - '**'
+    branches: [main]
   pull_request:
-    branches: [ "main" ]
+  workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+
+permissions:
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
-  CARGO_BUILD_JOBS: 2
+  CARGO_INCREMENTAL: 0
 
 jobs:
-  logic-parallel:
-    name: Logic Tests (Stable)
+  checks:
+    name: fmt / clippy / msrv / audit
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install Rust Stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Rust Cache
-        uses: Swatinem/rust-cache@v2
-
-      - name: Run Parallel Logic Tests
-        run: |
-          set +e
-          echo "Starting Parallel Logic Suite..."
-
-          # --- 1. NO_STD ---
-          (
-            export CARGO_TARGET_DIR="target_logic_nostd"
-            echo "[no_std] Running..."
-            cargo test --no-default-features --features "" > nostd.log 2>&1
-          ) &
-          PID_NOSTD=$!
-
-          # --- 2. STD ONLY ---
-          (
-            export CARGO_TARGET_DIR="target_logic_std"
-            echo "[std] Running..."
-            cargo test --no-default-features --features "std" > std.log 2>&1
-          ) &
-          PID_STD=$!
-
-          # --- 3. ALL FEATURES (Serde) ---
-          (
-            export CARGO_TARGET_DIR="target_logic_all"
-            echo "[all-features] Running..."
-            cargo test --all-features > all.log 2>&1
-          ) &
-          PID_ALL=$!
-
-          # --- WAIT AND REPORT ---
-          FAILED=0
-
-          wait $PID_NOSTD
-          if [ $? -ne 0 ]; then echo "[no_std] FAILED. Logs:"; cat nostd.log; FAILED=1; else echo "[no_std] PASSED"; fi
-
-          wait $PID_STD
-          if [ $? -ne 0 ]; then echo "[std] FAILED. Logs:"; cat std.log; FAILED=1; else echo "[std] PASSED"; fi
-
-          wait $PID_ALL
-          if [ $? -ne 0 ]; then echo "[all-features] FAILED. Logs:"; cat all.log; FAILED=1; else echo "[all-features] PASSED"; fi
-
-          if [ $FAILED -ne 0 ]; then exit 1; fi
-          set -e
-          echo "All Logic tests passed!"
-
-      - name: Cleanup Logs
-        if: always()
-        run: rm -f *.log
-
-  security-msan:
-    name: MemorySanitizer (Nightly)
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install Rust Nightly
-        uses: dtolnay/rust-toolchain@nightly
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rust-src 
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: v1-rust
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - name: rustfmt
+        run: cargo fmt --all --check
+      - name: cargo-audit
+        run: cargo audit
+      - name: clippy (default features)
+        run: cargo clippy --locked --all-targets
+      - name: clippy (all features)
+        run: cargo clippy --locked --all-targets --all-features
+      - name: clippy (no default features, lib only)
+        run: cargo clippy --locked --lib --no-default-features
+      - uses: dtolnay/rust-toolchain@1.87
+      - name: msrv (1.87)
+        run: cargo +1.87 check --locked --all-features
 
-      - name: Rust Cache
-        uses: Swatinem/rust-cache@v2
+  no-std:
+    name: no_std (bare-metal target)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv6m-none-eabi
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: v1-rust
+      - name: check lib on thumbv6m-none-eabi
+        run: cargo check --locked --no-default-features --lib --target thumbv6m-none-eabi
 
-      - name: Run MSan (Full Features)
-        run: |
-          RUSTFLAGS="-Z sanitizer=memory" cargo test -Z build-std \
-            --target x86_64-unknown-linux-gnu \
-            --all-features \
-            --lib \
-            --tests
+  test:
+    name: "test (${{ matrix.name }})"
+    runs-on: ${{ matrix.os || 'ubuntu-latest' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: default (linux)
+            os: ubuntu-latest
+          - name: default (macos)
+            os: macos-latest
+          - name: default (windows)
+            os: windows-latest
+          - name: all features
+            flags: --all-features
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: v1-rust
+          key: ${{ matrix.name }}
+      - name: test
+        run: cargo test --locked ${{ matrix.flags }}
+
+  fuzz-smoke:
+    name: fuzz build smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: v1-rust
+          workspaces: fuzz -> target
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+      - name: fuzz for 60s
+        run: cargo fuzz run fuzz_all_modes -- -max_total_time=60
+
+  docs:
+    name: rustdoc
+    runs-on: ubuntu-latest
+    env:
+      RUSTDOCFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: v1-rust
+      - run: cargo doc --locked --all-features --no-deps

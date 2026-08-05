@@ -37,7 +37,7 @@ def clean_benchmark_output(text):
 
 
 if __name__ == "__main__":
-    print("🚀 Benchmark Output Cleaner")
+    print("Benchmark Output Cleaner")
     print("Paste your messy benchmark text below (Ctrl+D / Ctrl+Z+Enter to finish):")
     print("-" * 70)
 
@@ -50,7 +50,7 @@ if __name__ == "__main__":
     result = clean_benchmark_output(messy_text)
 
     print("\n" + "=" * 70)
-    print("✅ CLEANED OUTPUT (ready to copy)")
+    print("CLEANED OUTPUT (ready to copy)")
     print("=" * 70)
     print(result)
     print("=" * 70)

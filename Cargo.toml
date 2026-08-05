@@ -6,7 +6,7 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
 authors = ["Hacer"]
-description = "A high-performance Base58 encoder/decoder for Rust, optimized for high-throughput systems."
+description = "A high-performance Base58 encoder/decoder for Rust, optimized for high-throughput systems"
 repository = "https://github.com/hacer-bark/base58-turbo"
 homepage = "https://github.com/hacer-bark/base58-turbo"
 documentation = "https://docs.rs/base58-turbo"
@@ -30,6 +30,26 @@ five8 = "1"
 serde_json = "1"
 base58-turbo = { path = "." }
 base58-monero = "2"
+
+[lints.rust]
+warnings = "deny"
+future_incompatible = "deny"
+unused = "deny"
+missing_docs = "deny"
+missing_debug_implementations = "deny"
+unreachable_pub = "deny"
+unsafe_code = "deny"
+
+[lints.clippy]
+all = "deny"
+pedantic = "deny"
+nursery = "deny"
+cargo = "deny"
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
 
 [[bench]]
 name = "encoding_bench"
