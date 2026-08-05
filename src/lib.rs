@@ -12,13 +12,6 @@
 //!
 //! ## Usage
 //!
-//! Add this to your `Cargo.toml`:
-//!
-//! ```toml
-//! [dependencies]
-//! base58-turbo = "0.1"
-//! ```
-//!
 //! ### Basic API (Allocating)
 //!
 //! Standard usage for general applications. Requires the `std` feature (enabled by default).
