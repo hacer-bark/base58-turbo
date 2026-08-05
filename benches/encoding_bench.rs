@@ -60,7 +60,7 @@ fn bench_comparison(c: &mut Criterion) {
     group.noise_threshold(0.05);
     group.sample_size(50);
 
-    let sizes = [16, 32, 48, 64, 128, 512];
+    let sizes = [16, 32, 48, 64, 128];
 
     for size in sizes.iter() {
         let input_data = generate_random_data(*size);

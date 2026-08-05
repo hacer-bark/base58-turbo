@@ -1,6 +1,6 @@
 [package]
 name = "base58-turbo"
-version = "0.1.0"
+version = "0.2.0"
 rust-version = "1.87"
 edition = "2024"
 license = "MIT OR Apache-2.0"
@@ -12,6 +12,7 @@ homepage = "https://github.com/hacer-bark/base58-turbo"
 documentation = "https://docs.rs/base58-turbo"
 keywords = ["base58", "encoding", "decoding", "performance", "crypto"]
 categories = ["encoding", "cryptography", "no-std"]
+exclude = ["benches/scripts/", "benches/results/"]
 
 [features]
 default = ["std"]
