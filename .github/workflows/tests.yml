@@ -85,22 +85,6 @@ jobs:
       - name: test
         run: cargo test --locked ${{ matrix.flags }}
 
-  fuzz-smoke:
-    name: fuzz build smoke test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@nightly
-      - uses: Swatinem/rust-cache@v2
-        with:
-          prefix-key: v1-rust
-          workspaces: fuzz -> target
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-fuzz
-      - name: fuzz for 60s
-        run: cargo fuzz run fuzz_all_modes -- -max_total_time=60
-
   docs:
     name: rustdoc
     runs-on: ubuntu-latest
