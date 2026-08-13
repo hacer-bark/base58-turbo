@@ -377,8 +377,8 @@ That leaves ordinary logic bugs as the only class of failure worth guarding agai
 
 | Feature | Default | Description |
 | :--- | :---: | :--- |
-| `serde` | | Enables `serde` serialization/deserialization for Config and Engine |
-| `std` | on | Enables `String` and `Vec` support. Disable for `no_std` |
+| `serde` | **No** | Enables `serde` serialization/deserialization for Config and Engine |
+| `std` | **Yes** | Enables `String` and `Vec` support. Disable for `no_std` |
 
 ## License
 
