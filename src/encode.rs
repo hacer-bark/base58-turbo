@@ -128,9 +128,8 @@ const TABLE_32: [[u32; 8]; 8] = generate_weights::<8, 8>();
 // 64 bytes -> 16 input chunks -> 18 output digits
 const TABLE_64: [[u32; 18]; 16] = generate_weights::<16, 18>();
 
-/// Limb budget per length class for the general kernel.
-const TINY_LIMBS: usize = 10; // <= 24 bytes -> 9 limbs
-const SMALL_LIMBS: usize = 24; // <= 63 bytes -> 18 limbs
+/// Limb budget per length class for the general kernel, which now only runs
+/// above 64 bytes.
 const MEDIUM_LIMBS: usize = 96; // <= 320 bytes -> 88 limbs
 const LARGE_LIMBS: usize = 288; // <= 1024 bytes -> 280 limbs
 
@@ -400,6 +399,174 @@ fn process_fixed_64(src: &[u8; 64], out_digits: &mut [u64; 10]) -> usize {
     out_digits[9] = digits[0];
 
     if out_digits[9] > 0 { 10 } else { 9 }
+}
+
+// ----------------------------------------------------------------------
+// Small-Input Matrix Kernel (<= 64 bytes)
+// ----------------------------------------------------------------------
+//
+// The fixed 25/32/64 kernels above are fast because every trip count is a
+// compile-time constant, so the dot products unroll and vectorize. Every other
+// length under 64 bytes used to fall through to `process_general`, whose Horner
+// loop costs one division per limb per 4 input bytes; at 31 bytes that is a
+// serial chain of 36 divisions against the 9 of a matrix multiply.
+//
+// This kernel gives every length the fixed-kernel treatment. The input is
+// right-aligned into the low word-rows of `TABLE_64`, so one table serves all
+// widths, and W is a const generic so each length class monomorphizes into its
+// own unrolled body.
+
+/// Digit count per width, **rounded up to an even number**.
+///
+/// The rounding is not padding for its own sake. An odd digit count leaves a
+/// scalar remainder on the 2-wide SSE2 dot product and measures as a hard cliff:
+/// at W = 13 the natural 15 digits ran slower than 16 did. One extra
+/// provably-zero leading digit costs `W` multiply-adds and one sweep limb and
+/// buys back an even trip count. `dispatch_widths_match_spec` checks the
+/// literals in the dispatch against this table.
+#[cfg(test)]
+const DIGITS_FOR_W: [usize; 17] = [
+    0, 2, 4, 4, 6, 6, 8, 8, 10, 10, 12, 14, 14, 16, 16, 18, 18,
+];
+
+/// The bottom-right `W x D` corner of [`TABLE_64`]: rows for the low `W` input
+/// words, columns for the low `D` digits.
+///
+/// Dropping the high columns is exact, not an approximation: a row for word `i`
+/// carries the weight `2^(32*i) < 2^(32*W)`, which needs at most `D` digits, so
+/// every entry above them is zero. Verified exhaustively for all 16 widths.
+const fn sub_table<const W: usize, const D: usize>() -> [[u32; D]; W] {
+    let mut t = [[0u32; D]; W];
+    let mut r = 0;
+    while r < W {
+        let mut c = 0;
+        while c < D {
+            t[r][c] = TABLE_64[16 - W + r][18 - D + c];
+            c += 1;
+        }
+        r += 1;
+    }
+    t
+}
+
+/// Carrier for the per-`(W, D)` sub-table. An item inside a function body cannot
+/// see that function's generic parameters, so the table hangs off a generic impl.
+struct Tab<const W: usize, const D: usize>;
+
+impl<const W: usize, const D: usize> Tab<W, D> {
+    const T: [[u32; D]; W] = sub_table::<W, D>();
+}
+
+/// Loads `src` right-aligned into `W` big-endian words, most significant first.
+///
+/// The most significant word holds the `len - 4*(W-1)` leading bytes, which is
+/// 1 to 4, so lengths that are not a multiple of 4 need no separate tail pass.
+#[inline]
+fn load_words<const W: usize>(src: &[u8]) -> [u32; W] {
+    let mut words = [0u32; W];
+    let head = src.len() - 4 * (W - 1);
+
+    let mut top = 0u32;
+    for &b in &src[..head] {
+        top = (top << 8) | u32::from(b);
+    }
+    words[0] = top;
+
+    for (slot, chunk) in words[1..].iter_mut().zip(src[head..].chunks_exact(4)) {
+        // `chunks_exact(4)` guarantees every `chunk` is exactly 4 bytes.
+        let bytes: [u8; 4] = chunk.try_into().unwrap_or_else(|_| unreachable!());
+        *slot = u32::from_be_bytes(bytes);
+    }
+    words
+}
+
+/// Matrix-multiplies `W` right-aligned words into `D` normalized, big-endian
+/// Base 58^5 digits.
+///
+/// A u64 column accumulates `W` products of `x * p` with `x < 2^32` and
+/// `p < 58^5`. Checked exactly against the real table rather than bounded
+/// loosely: 11 rows is the widest batch that cannot overflow, so `W >= 12` runs
+/// as two halves with a carry sweep after each. After the first sweep every
+/// digit is below `RADIX_58_5`, which leaves room for the second batch's sum.
+///
+/// The `as u32` truncations are remainders of division by `RADIX_58_5 < 2^32`.
+#[inline]
+#[allow(clippy::cast_possible_truncation)]
+fn matrix<const W: usize, const D: usize>(words: &[u32; W]) -> [u64; D] {
+    let table = &Tab::<W, D>::T;
+    let mut acc = [0u64; D];
+
+    // Rows this batch covers; `W >= 12` overflows a u64 column, so it runs the
+    // low half first and folds the high half in after a reducing sweep.
+    let first = if W <= 11 { 0 } else { W / 2 };
+
+    for (k, slot) in acc.iter_mut().enumerate() {
+        let mut sum = 0u64;
+        for (&x, row) in words[first..].iter().zip(table[first..].iter()) {
+            sum += u64::from(x) * u64::from(row[k]);
+        }
+        *slot = sum;
+    }
+
+    if first != 0 {
+        sweep(&mut acc);
+        for (k, slot) in acc.iter_mut().enumerate() {
+            let mut sum = 0u64;
+            for (&x, row) in words[..first].iter().zip(table[..first].iter()) {
+                sum += u64::from(x) * u64::from(row[k]);
+            }
+            *slot += sum;
+        }
+    }
+
+    sweep(&mut acc);
+    acc
+}
+
+/// Carry-normalizes big-endian Base 58^5 digits in place.
+#[inline]
+fn sweep<const D: usize>(acc: &mut [u64; D]) {
+    let mut carry = 0u64;
+    for slot in acc.iter_mut().rev() {
+        let val = *slot + carry;
+        *slot = val % RADIX_58_5;
+        carry = val / RADIX_58_5;
+    }
+    debug_assert_eq!(carry, 0, "the top digit absorbs the final carry");
+}
+
+/// Packs big-endian Base 58^5 digits into little-endian Base 58^10 digits.
+///
+/// `D` is always even, so the digits pair up exactly.
+#[inline]
+fn pack_pairs<const D: usize, const H: usize>(acc: &[u64; D], out: &mut [u64; H]) -> usize {
+    for (n, slot) in out.iter_mut().enumerate() {
+        let k = D - 2 * n;
+        *slot = acc[k - 2] * RADIX_58_5 + acc[k - 1];
+    }
+
+    let mut count = H;
+    while count > 1 && out[count - 1] == 0 {
+        count -= 1;
+    }
+    count
+}
+
+/// Encodes 1 to 64 bytes through the matrix kernel for width `W`.
+/// Kept `inline`: outlining the sixteen monomorphizations was measured both
+/// ways and costs 4% on small inputs (1.52x -> 1.46x) without buying back the
+/// >64-byte path, so the digit arrays are better off staying in registers.
+#[inline]
+fn process_small<const W: usize, const D: usize, const H: usize>(
+    src: &[u8],
+    dst: &mut [u8],
+    config: &Config,
+) -> usize {
+    let words = load_words::<W>(src);
+    let acc = matrix::<W, D>(&words);
+    let mut digits = [0u64; H];
+    let n = pack_pairs::<D, H>(&acc, &mut digits);
+    write_digits_to_string(config, &digits[..n], dst)
 }
 
 // ----------------------------------------------------------------------
@@ -757,20 +924,26 @@ pub fn encode_slice(input: &[u8], dst: &mut [u8], config: &Config) -> Result<usi
             let n = process_fixed_64(src, &mut digits);
             write_digits_to_string(config, &digits[..n], dst)
         }
-        // Under 64 bytes there is never a whole block, so the block scratch is
-        // empty and costs nothing to zero.
-        len if len <= 24 => {
-            let mut limbs = [0u32; TINY_LIMBS];
-            let mut digits = [0u64; TINY_LIMBS / 2];
-            let n = process_general(src, &mut limbs, &mut [], &mut digits);
-            write_digits_to_string(config, &digits[..n], dst)
-        }
-        len if len <= 64 => {
-            let mut limbs = [0u32; SMALL_LIMBS];
-            let mut digits = [0u64; SMALL_LIMBS / 2];
-            let n = process_general(src, &mut limbs, &mut [], &mut digits);
-            write_digits_to_string(config, &digits[..n], dst)
-        }
+        // Every other length up to 64 bytes goes through the matrix kernel,
+        // dispatched on its word count so W and D are compile-time constants.
+        len if len <= 64 => match len.div_ceil(4) {
+            1 => process_small::<1, 2, 1>(src, dst, config),
+            2 => process_small::<2, 4, 2>(src, dst, config),
+            3 => process_small::<3, 4, 2>(src, dst, config),
+            4 => process_small::<4, 6, 3>(src, dst, config),
+            5 => process_small::<5, 6, 3>(src, dst, config),
+            6 => process_small::<6, 8, 4>(src, dst, config),
+            7 => process_small::<7, 8, 4>(src, dst, config),
+            8 => process_small::<8, 10, 5>(src, dst, config),
+            9 => process_small::<9, 10, 5>(src, dst, config),
+            10 => process_small::<10, 12, 6>(src, dst, config),
+            11 => process_small::<11, 14, 7>(src, dst, config),
+            12 => process_small::<12, 14, 7>(src, dst, config),
+            13 => process_small::<13, 16, 8>(src, dst, config),
+            14 => process_small::<14, 16, 8>(src, dst, config),
+            15 => process_small::<15, 18, 9>(src, dst, config),
+            _ => process_small::<16, 18, 9>(src, dst, config),
+        },
         len if len <= 320 => {
             let mut limbs = [0u32; MEDIUM_LIMBS];
             let mut tmp = [0u64; MEDIUM_LIMBS];
@@ -887,10 +1060,151 @@ mod tests {
     fn scratch_classes_are_large_enough() {
         // Every length must fit the limb budget of the class it dispatches to.
         let limbs = |len: usize| (len * 8).div_ceil(29) + 2;
-        assert!(limbs(24) <= TINY_LIMBS, "tiny class too tight");
-        assert!(limbs(63) <= SMALL_LIMBS, "small class too tight");
         assert!(limbs(320) <= MEDIUM_LIMBS, "medium class too tight");
         assert!(limbs(1024) <= LARGE_LIMBS, "large class too tight");
+    }
+
+    /// Schoolbook base-256 -> base-58 long division. Slow, obviously correct.
+    fn encode_reference(input: &[u8], config: &Config) -> Vec<u8> {
+        let zeros = input.iter().take_while(|&&b| b == 0).count();
+        let mut digits: Vec<u8> = Vec::new();
+        for &byte in &input[zeros..] {
+            let mut carry = u32::from(byte);
+            for d in digits.iter_mut() {
+                let v = u32::from(*d) * 256 + carry;
+                *d = (v % 58) as u8;
+                carry = v / 58;
+            }
+            while carry > 0 {
+                digits.push((carry % 58) as u8);
+                carry /= 58;
+            }
+        }
+        let mut out = vec![config.alphabet[0]; zeros];
+        out.extend(digits.iter().rev().map(|&d| config.alphabet[d as usize]));
+        out
+    }
+
+    /// Digits needed to write the largest `W`-word value in Base 58^5.
+    fn digits_needed(w: usize) -> usize {
+        let mut v = max_w_word_value(w);
+        let mut n = 0;
+        while !v.is_empty() {
+            v = div_small(&v, RADIX_58_5);
+            n += 1;
+        }
+        n
+    }
+
+    /// `2^(32*w) - 1` as little-endian base-2^32 limbs.
+    fn max_w_word_value(w: usize) -> Vec<u64> {
+        vec![u64::from(u32::MAX); w]
+    }
+
+    fn div_small(v: &[u64], d: u64) -> Vec<u64> {
+        let mut out = vec![0u64; v.len()];
+        let mut rem = 0u64;
+        for i in (0..v.len()).rev() {
+            let cur = (rem << 32) | v[i];
+            out[i] = cur / d;
+            rem = cur % d;
+        }
+        while out.last() == Some(&0) {
+            out.pop();
+        }
+        out
+    }
+
+    #[test]
+    fn digits_for_w_is_even_and_sufficient() {
+        for w in 1..=16 {
+            let d = DIGITS_FOR_W[w];
+            assert_eq!(d % 2, 0, "W={w}: D must be even for the 2-wide dot product");
+            assert!(d <= 18, "W={w}: D={d} exceeds TABLE_64's 18 columns");
+            assert!(
+                d >= digits_needed(w),
+                "W={w}: D={d} cannot hold {} digits",
+                digits_needed(w)
+            );
+        }
+    }
+
+    #[test]
+    fn sub_table_drops_only_zero_columns() {
+        // Taking the low D columns is exact only if everything above them is zero.
+        for w in 1..=16usize {
+            let d = DIGITS_FOR_W[w];
+            for r in (16 - w)..16 {
+                for (k, &entry) in TABLE_64[r].iter().enumerate().take(18 - d) {
+                    assert_eq!(entry, 0, "W={w}: TABLE_64[{r}][{k}] would be dropped");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn matrix_columns_cannot_overflow_u64() {
+        // Worst case: every input word is u32::MAX. Mirrors `matrix`'s batching:
+        // one batch to W=11, then a split at W/2.
+        let x = u64::from(u32::MAX);
+        for w in 1..=16usize {
+            let d = DIGITS_FOR_W[w];
+            let rows: Vec<usize> = ((16 - w)..16).collect();
+            let col_sum = |batch: &[usize], k: usize| -> u128 {
+                batch
+                    .iter()
+                    .map(|&r| u128::from(x) * u128::from(TABLE_64[r][18 - d + k]))
+                    .sum()
+            };
+            let limit = u128::from(u64::MAX);
+            if w <= 11 {
+                for k in 0..d {
+                    assert!(col_sum(&rows, k) <= limit, "W={w} col {k} overflows");
+                }
+            } else {
+                // `matrix` accumulates the low half first, sweeps, then folds in
+                // the high half on top of digits already below the radix.
+                let half = w / 2;
+                for k in 0..d {
+                    assert!(col_sum(&rows[half..], k) <= limit, "W={w} first batch col {k}");
+                    assert!(
+                        col_sum(&rows[..half], k) + u128::from(RADIX_58_5) <= limit,
+                        "W={w} second batch col {k}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn matrix_kernel_matches_reference_for_every_small_length() {
+        // The matrix kernel owns every length up to 64 except 25/32/64.
+        for len in 1..=64usize {
+            for pattern in 0..5u8 {
+                let data: Vec<u8> = (0..len)
+                    .map(|i| match pattern {
+                        0 => (i as u8).wrapping_mul(31).wrapping_add(7),
+                        1 => 0xff,
+                        2 => u8::from(i + 1 == len),
+                        3 => {
+                            if i < len / 2 {
+                                0
+                            } else {
+                                0xff
+                            }
+                        }
+                        _ => 0x80,
+                    })
+                    .collect();
+                let want = encode_reference(&data, BITCOIN.config());
+                let got = BITCOIN.encode(&data).unwrap();
+                assert_eq!(
+                    got.as_bytes(),
+                    &want[..],
+                    "len {len} pattern {pattern} data {data:?}"
+                );
+            }
+        }
     }
 
     #[test]

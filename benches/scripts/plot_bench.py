@@ -17,8 +17,6 @@ THRPT_RE = re.compile(
 
 UNIT_TO_MIB = {"KiB": 1 / 1024, "MiB": 1.0, "GiB": 1024.0}
 
-# Fixed categorical order/colors, per the house palette (slots 1-6).
-# Color follows the library identity, never its rank at a given size.
 LIBRARY_ORDER = ["Turbo", "bs58", "base58", "five8", "Turbo_XMR", "base58_monero"]
 LIBRARY_LABEL = {
     "Turbo": "base58-turbo",
@@ -37,8 +35,6 @@ COLORS = {
     "base58_monero": "#4a3aa7",
 }
 
-# No fixed surface: the chart sits on whatever page background it's placed
-# on (GitHub light or dark theme), so ink is a neutral gray readable on both.
 THEME = {
     "paper": "rgba(0,0,0,0)",
     "plot": "rgba(0,0,0,0)",
@@ -96,9 +92,6 @@ def render(data, out_path):
         vertical_spacing=0.16,
     )
 
-    # Constant per-bar width (a share of the full roster) so a group with
-    # fewer libraries present (e.g. five8, only benched at 32/64/128 B) just
-    # draws a narrower cluster instead of leaving a gap for the missing bar.
     bar_w = 0.9 / len(LIBRARY_ORDER)
     half_max = len(LIBRARY_ORDER) * bar_w / 2
     x_pad = 0.03
