@@ -147,7 +147,7 @@ python3 benches/scripts/plot_bench.py benches/results/raw.txt
 <details>
 <summary>Raw <code>cargo bench</code> output</summary>
 
-```
+```ignore
 Benchmarking Base58_Performances/Encode/Turbo/16
   time:   [43.612 ns 43.638 ns 43.668 ns]
   thrpt:  [349.43 MiB/s 349.67 MiB/s 349.88 MiB/s]

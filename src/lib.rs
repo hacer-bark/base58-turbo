@@ -70,6 +70,10 @@
 #![forbid(unsafe_code, elided_lifetimes_in_paths)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
+#[cfg(all(doctest, feature = "std"))]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;
+
 // Use `serde` when enabled
 #[cfg(feature = "serde")]
 pub mod serde;
