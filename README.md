@@ -105,7 +105,7 @@ Supports multiple Base58 alphabets:
 ### Public API Stability
 The public API (traits, structs, and error types) is considered **Stable**.
 *   We adhere to **Semantic Versioning**.
-*   The current API surface will remain valid and backward-compatible throughout the `0.2.x` lifecycle.
+*   The current API surface will remain valid and backward-compatible throughout the `0.3.x` lifecycle.
 
 ### Benchmarks
 
