@@ -49,10 +49,10 @@
 
 use crate::{Config, Error};
 
-#[cfg(target_arch = "x86_64")]
-use core::arch::x86_64::*;
 #[cfg(target_arch = "x86")]
 use core::arch::x86::*;
+#[cfg(target_arch = "x86_64")]
+use core::arch::x86_64::*;
 
 /// 58^2, the intermediate radix.
 const R2: u64 = 3364;

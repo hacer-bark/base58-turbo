@@ -404,7 +404,10 @@ impl Engine {
             return Err(Error::BufferTooSmall);
         }
 
-        #[cfg(all(feature = "unsafe-simd", any(target_arch = "x86_64", target_arch = "x86")))]
+        #[cfg(all(
+            feature = "unsafe-simd",
+            any(target_arch = "x86_64", target_arch = "x86")
+        ))]
         {
             if crate::simd::avx2_available() {
                 // SAFETY: AVX2 was just confirmed present, and the length checks
