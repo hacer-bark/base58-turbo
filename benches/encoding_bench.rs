@@ -91,7 +91,11 @@ fn bench_comparison(c: &mut Criterion) {
                 |b, d| {
                     let mut buf = vec![0u8; BITCOIN.encoded_len(d.len())];
                     b.iter(|| {
-                        black_box(BITCOIN.encode_into(black_box(d), black_box(&mut buf)).unwrap())
+                        black_box(
+                            BITCOIN
+                                .encode_into(black_box(d), black_box(&mut buf))
+                                .unwrap(),
+                        )
                     });
                 },
             );
@@ -105,7 +109,11 @@ fn bench_comparison(c: &mut Criterion) {
                 |b, d| {
                     let mut buf = vec![0u8; d.len() * 2 + 8];
                     b.iter(|| {
-                        black_box(encode_std(black_box(d)).onto(black_box(&mut buf[..])).unwrap())
+                        black_box(
+                            encode_std(black_box(d))
+                                .onto(black_box(&mut buf[..]))
+                                .unwrap(),
+                        )
                     });
                 },
             );
@@ -150,7 +158,10 @@ fn bench_comparison(c: &mut Criterion) {
                 |b, d| {
                     let mut buf = vec![0u8; d.len() * 2 + 16];
                     b.iter(|| {
-                        black_box(base58_turbo::xmr::encode_into(black_box(d), black_box(&mut buf)).unwrap())
+                        black_box(
+                            base58_turbo::xmr::encode_into(black_box(d), black_box(&mut buf))
+                                .unwrap(),
+                        )
                     });
                 },
             );
@@ -175,7 +186,11 @@ fn bench_comparison(c: &mut Criterion) {
                 |b, d| {
                     let mut buf = vec![0u8; BITCOIN.decoded_len(d.len())];
                     b.iter(|| {
-                        black_box(BITCOIN.decode_into(black_box(d), black_box(&mut buf)).unwrap())
+                        black_box(
+                            BITCOIN
+                                .decode_into(black_box(d), black_box(&mut buf))
+                                .unwrap(),
+                        )
                     });
                 },
             );
@@ -189,7 +204,11 @@ fn bench_comparison(c: &mut Criterion) {
                 |b, d| {
                     let mut buf = vec![0u8; d.len()];
                     b.iter(|| {
-                        black_box(decode_std(black_box(d)).onto(black_box(&mut buf[..])).unwrap())
+                        black_box(
+                            decode_std(black_box(d))
+                                .onto(black_box(&mut buf[..]))
+                                .unwrap(),
+                        )
                     });
                 },
             );
@@ -241,7 +260,10 @@ fn bench_comparison(c: &mut Criterion) {
                 |b, d| {
                     let mut buf = vec![0u8; d.len()];
                     b.iter(|| {
-                        black_box(base58_turbo::xmr::decode_into(black_box(d), black_box(&mut buf)).unwrap())
+                        black_box(
+                            base58_turbo::xmr::decode_into(black_box(d), black_box(&mut buf))
+                                .unwrap(),
+                        )
                     });
                 },
             );

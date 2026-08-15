@@ -608,6 +608,10 @@ fn simd_matches_scalar_for_32_byte_inputs() {
     }
 }
 
+#[cfg(all(
+    feature = "unsafe-simd",
+    any(target_arch = "x86_64", target_arch = "x86")
+))]
 #[test]
 fn simd_batch_matches_single() {
     fn xs(s: &mut u64) -> u64 {
@@ -897,8 +901,8 @@ fn decode_matrix_respects_exact_output_buffers() {
             // This is what catches a one-byte overrun from the constant-size
             // copies in the emit tail, which `decoded_len`'s slack would hide.
             let mut tight = vec![0xAAu8; want.len() + 1];
-            let n = base58_turbo::decode::decode_slice(&input, &mut tight[..want.len()], cfg)
-                .unwrap();
+            let n =
+                base58_turbo::decode::decode_slice(&input, &mut tight[..want.len()], cfg).unwrap();
             assert_eq!(&tight[..n], &want[..], "tight len={len}");
             assert_eq!(tight[want.len()], 0xAA, "tight overran at len={len}");
         }

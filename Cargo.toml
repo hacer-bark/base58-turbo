@@ -30,7 +30,6 @@ bs58 = "0.5"
 base58 = "0.2"
 five8 = "1"
 serde_json = "1"
-base58-turbo = { path = "." }
 base58-monero = "2"
 
 [lints.rust]

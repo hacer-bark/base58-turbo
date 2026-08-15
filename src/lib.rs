@@ -3,10 +3,10 @@
 //! [![Crates.io](https://img.shields.io/crates/v/base58-turbo.svg)](https://crates.io/crates/base58-turbo)
 //! [![Documentation](https://docs.rs/base58-turbo/badge.svg)](https://docs.rs/base58-turbo)
 //! [![License](https://img.shields.io/github/license/hacer-bark/base58-turbo)](https://github.com/hacer-bark/base58-turbo/blob/main/LICENSE-APACHE)
-//! [![Unsafe forbidden](https://img.shields.io/badge/unsafe-forbidden-success.svg)](https://github.com/rust-secure-code/safety-dance/)
 //!
-//! *(`unsafe` is forbidden in the default build; the optional `unsafe-simd`
-//! feature confines it to a single AVX2 module.)*
+//! *(The default build enables `unsafe-simd`, which adds one `unsafe` AVX2
+//! module on x86/x86-64. Disable it — or build for a non-x86 target — for
+//! `#![forbid(unsafe_code)]`.)*
 //!
 //! A high-performance Base58 encoder/decoder for Rust, optimized for high-throughput systems.
 //!
@@ -54,21 +54,23 @@
 //! |---------|---------|-------------|
 //! | **`serde`** | **No** | Enables `serde` serialization/deserialization for Config and Engine. |
 //! | **`std`** | **Yes** | Enables `String` and `Vec` support. Disable this for `no_std` environments. |
-//! | **`unsafe-simd`** | **No** | AVX2 encoding and decoding kernels on x86-64, selected at runtime. |
+//! | **`unsafe-simd`** | **Yes** | AVX2 encoding and decoding kernels on x86/x86-64, selected at runtime. Adds the crate's only `unsafe` code; no effect on other targets. |
 //!
 //! ## Safety & Verification
 //!
-//! By default this crate is `#![forbid(unsafe_code)]`: the compiler rejects any
-//! `unsafe` block anywhere in the crate. Performance comes from the base conversion
-//! algorithm and from shaping the hot loops so the compiler can drop bounds checks
-//! on its own, not from bypassing them.
+//! `unsafe-simd` is on by default, and on x86/x86-64 it enables one `unsafe`
+//! module, `src/simd.rs`, which holds the AVX2 kernels — the only `unsafe`
+//! in the crate. The kernels are reached only after a runtime AVX2 check, so
+//! a binary built with the feature still runs correctly on hardware without
+//! AVX2, and every non-x86 target keeps the scalar path regardless of the
+//! feature.
 //!
-//! Enabling **`unsafe-simd`** relaxes that to allow one module, `src/simd.rs`,
-//! which holds the AVX2 kernels and is the only `unsafe` in the crate. The
-//! kernels are reached only after a runtime AVX2 check, so a binary built with
-//! the feature still runs correctly on hardware without it, and every other
-//! target keeps the scalar path. If you need the absolute guarantee, leave the
-//! feature off and the `forbid` stands.
+//! Build with `default-features = false` (re-enabling `std` as needed) — or
+//! target a non-x86 platform — and `#![forbid(unsafe_code)]` applies: the
+//! compiler rejects any `unsafe` block anywhere in the crate. Performance in
+//! that configuration comes entirely from the base conversion algorithm and
+//! from shaping the hot loops so the compiler can drop bounds checks on its
+//! own, not from bypassing them.
 //!
 //! *   **Tests:** exact conformance vectors, every kernel-dispatch and scratch-buffer
 //!     boundary, and randomized cross-validation against `bs58`, `base58`, `five8`,
@@ -83,7 +85,10 @@
 #![cfg_attr(not(any(feature = "std", test)), no_std)]
 #![doc(issue_tracker_base_url = "https://github.com/hacer-bark/base58-turbo/issues/")]
 #![cfg_attr(
-    not(all(feature = "unsafe-simd", target_arch = "x86_64")),
+    not(all(
+        feature = "unsafe-simd",
+        any(target_arch = "x86_64", target_arch = "x86")
+    )),
     forbid(unsafe_code)
 )]
 #![forbid(elided_lifetimes_in_paths)]
@@ -102,7 +107,10 @@ pub mod xmr;
 pub mod decode;
 pub mod encode;
 
-#[cfg(all(feature = "unsafe-simd", target_arch = "x86_64"))]
+#[cfg(all(
+    feature = "unsafe-simd",
+    any(target_arch = "x86_64", target_arch = "x86")
+))]
 mod simd;
 use decode::decode_slice;
 #[cfg(feature = "std")]
@@ -396,7 +404,7 @@ impl Engine {
             return Err(Error::BufferTooSmall);
         }
 
-        #[cfg(all(feature = "unsafe-simd", target_arch = "x86_64"))]
+        #[cfg(all(feature = "unsafe-simd", any(target_arch = "x86_64", target_arch = "x86")))]
         {
             if crate::simd::avx2_available() {
                 // SAFETY: AVX2 was just confirmed present, and the length checks

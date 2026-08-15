@@ -60,7 +60,6 @@ def nice_axis(max_value, target_ticks=6):
     top = math.ceil(max_value / step) * step
     return step, top
 
-
 def parse(text):
     """-> {phase: {size: {library: mib_per_s}}}"""
     data = {"Encode": {}, "Decode": {}}
@@ -101,11 +100,12 @@ def render(data, out_path):
         for xi, size in enumerate(sizes):
             present = [lib for lib in LIBRARY_ORDER if lib in data[phase].get(size, {})]
             start = xi - (len(present) * bar_w) / 2
+            winner = max(present, key=lambda lib: data[phase][size][lib])
             for j, lib in enumerate(present):
                 value = data[phase][size][lib]
                 series[lib]["x"].append(start + bar_w * (j + 0.5))
                 series[lib]["y"].append(value)
-                series[lib]["text"].append(f"{value:.0f}" if lib == "Turbo" else "")
+                series[lib]["text"].append(f"{value:.1f}" if lib == winner else "")
 
         phase_max = max(v for s in series.values() for v in s["y"])
         _, y_top = nice_axis(phase_max)

@@ -394,7 +394,10 @@ fn matrix_64(src: &[u8; 64]) -> [u64; 19] {
 /// output of 43 or 44 characters.
 #[inline]
 fn encode_fixed_32(src: &[u8; 32], dst: &mut [u8], config: &Config) -> usize {
-    #[cfg(all(feature = "unsafe-simd", target_arch = "x86_64"))]
+    #[cfg(all(
+        feature = "unsafe-simd",
+        any(target_arch = "x86_64", target_arch = "x86")
+    ))]
     {
         if dst.len() >= 44 && crate::simd::avx2_available() {
             // SAFETY: AVX2 was just confirmed present, `dst` holds at least the
@@ -415,7 +418,10 @@ fn encode_fixed_32(src: &[u8; 32], dst: &mut [u8], config: &Config) -> usize {
 /// As with [`encode_fixed_32`], `src` never starts with a zero byte here.
 #[inline]
 fn encode_fixed_64(src: &[u8; 64], dst: &mut [u8], config: &Config) -> usize {
-    #[cfg(all(feature = "unsafe-simd", target_arch = "x86_64"))]
+    #[cfg(all(
+        feature = "unsafe-simd",
+        any(target_arch = "x86_64", target_arch = "x86")
+    ))]
     {
         if dst.len() >= 88 && crate::simd::avx2_available() {
             // SAFETY: AVX2 confirmed present, `dst` holds the 88 bytes the
@@ -470,9 +476,7 @@ fn process_fixed_64(src: &[u8; 64], out_digits: &mut [u64; 10]) -> usize {
 /// buys back an even trip count. `dispatch_widths_match_spec` checks the
 /// literals in the dispatch against this table.
 #[cfg(test)]
-const DIGITS_FOR_W: [usize; 17] = [
-    0, 2, 4, 4, 6, 6, 8, 8, 10, 10, 12, 14, 14, 16, 16, 18, 18,
-];
+const DIGITS_FOR_W: [usize; 17] = [0, 2, 4, 4, 6, 6, 8, 8, 10, 10, 12, 14, 14, 16, 16, 18, 18];
 
 /// The bottom-right `W x D` corner of [`TABLE_64`]: rows for the low `W` input
 /// words, columns for the low `D` digits.
@@ -943,7 +947,10 @@ pub fn encode_slice(input: &[u8], dst: &mut [u8], config: &Config) -> Result<usi
     // 32 bytes is the dominant real-world size (keys, hashes). Take it before
     // the generic preamble: the AVX2 kernel counts the leading zero run with a
     // single movemask, so `write_leading_zeros` would be wasted work.
-    #[cfg(all(feature = "unsafe-simd", target_arch = "x86_64"))]
+    #[cfg(all(
+        feature = "unsafe-simd",
+        any(target_arch = "x86_64", target_arch = "x86")
+    ))]
     {
         if crate::simd::avx2_available() {
             if input.len() == 32 && dst.len() >= 44 {
@@ -1234,7 +1241,10 @@ mod tests {
                 // the high half on top of digits already below the radix.
                 let half = w / 2;
                 for k in 0..d {
-                    assert!(col_sum(&rows[half..], k) <= limit, "W={w} first batch col {k}");
+                    assert!(
+                        col_sum(&rows[half..], k) <= limit,
+                        "W={w} first batch col {k}"
+                    );
                     assert!(
                         col_sum(&rows[..half], k) + u128::from(RADIX_58_5) <= limit,
                         "W={w} second batch col {k}"

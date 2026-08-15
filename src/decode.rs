@@ -444,7 +444,10 @@ macro_rules! mat_dispatch {
 /// Returns the number of bytes written.
 #[inline]
 fn decode_payload(config: &Config, src: &[u8], dst: &mut [u8]) -> Result<usize, Error> {
-    #[cfg(all(feature = "unsafe-simd", target_arch = "x86_64"))]
+    #[cfg(all(
+        feature = "unsafe-simd",
+        any(target_arch = "x86_64", target_arch = "x86")
+    ))]
     {
         if let Some(r) = crate::simd::decode_payload(config, src, dst) {
             return r;
@@ -453,12 +456,34 @@ fn decode_payload(config: &Config, src: &[u8], dst: &mut [u8]) -> Result<usize, 
 
     if src.len() <= MAT_MAX_CHARS {
         mat_dispatch!(
-            config, src, dst, src.len(),
-(1,1,1,1), (2,1,1,1), (3,1,1,2), (4,1,1,3), (5,2,1,3),
-            (6,2,2,4), (7,2,2,5), (8,2,2,6), (9,3,2,6), (10,3,2,7),
-            (11,3,3,8), (12,3,3,9), (13,4,3,9), (14,4,3,10), (15,4,3,11),
-            (16,4,3,11), (17,5,4,12), (18,5,4,13), (19,5,4,14), (20,5,4,14),
-            (21,6,4,15), (22,6,5,16), (23,6,5,17), (24,6,5,17)
+            config,
+            src,
+            dst,
+            src.len(),
+            (1, 1, 1, 1),
+            (2, 1, 1, 1),
+            (3, 1, 1, 2),
+            (4, 1, 1, 3),
+            (5, 2, 1, 3),
+            (6, 2, 2, 4),
+            (7, 2, 2, 5),
+            (8, 2, 2, 6),
+            (9, 3, 2, 6),
+            (10, 3, 2, 7),
+            (11, 3, 3, 8),
+            (12, 3, 3, 9),
+            (13, 4, 3, 9),
+            (14, 4, 3, 10),
+            (15, 4, 3, 11),
+            (16, 4, 3, 11),
+            (17, 5, 4, 12),
+            (18, 5, 4, 13),
+            (19, 5, 4, 14),
+            (20, 5, 4, 14),
+            (21, 6, 4, 15),
+            (22, 6, 5, 16),
+            (23, 6, 5, 17),
+            (24, 6, 5, 17)
         );
     }
 
