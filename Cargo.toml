@@ -15,9 +15,10 @@ categories = ["encoding", "cryptography", "no-std"]
 exclude = ["benches/scripts/", "benches/results/"]
 
 [features]
-default = ["std"]
+default = ["unsafe-simd", "std"]
 std = []
 serde = ["std", "dep:serde"]
+unsafe-simd = ["std"]
 
 [dependencies]
 serde = { version = "1", optional = true, features = ["derive"] }
@@ -39,7 +40,6 @@ unused = "deny"
 missing_docs = "deny"
 missing_debug_implementations = "deny"
 unreachable_pub = "deny"
-unsafe_code = "deny"
 
 [lints.clippy]
 all = "deny"

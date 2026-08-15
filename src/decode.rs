@@ -230,10 +230,238 @@ fn emit(bignum: &[u64], dst: &mut [u8]) -> Result<usize, Error> {
     Ok(length)
 }
 
+// ----------------------------------------------------------------------
+// Weight-matrix path (short payloads)
+// ----------------------------------------------------------------------
+//
+// `accumulate` is a Horner chain: each `bignum_mul_add` waits on the one
+// before it, so for a short payload the kernel spends most of its time on a
+// dependency chain rather than on work. The alternative is to evaluate the
+// whole radix conversion flat.
+//
+// Group the characters into `R` digits of four, each below 58^4 < 2^24, and
+// give digit `r` the weight 58^(4*(R-1-r)) written out in base 2^32. The value
+// is then a single sum:
+//
+//     value = sum_r d_r * 58^(4*(R-1-r))
+//
+// Column `j` takes at most `R` products of a 24-bit digit by a 32-bit limb, so
+// it peaks at 24+32+log2(R) bits and fits a u64 with room to spare. Because the
+// output radix is 2^32, normalizing the columns is carry-and-shift — decode
+// never divides, which is the one place it has an easier job than encode.
+//
+// The weights are triangular (58^0 fills one limb, 58^36 fills seven), and LLVM
+// folds the zero entries away because the table is a constant: the 44-character
+// case compiles to 40 multiplies rather than the 99 a dense read would give.
+//
+// In isolation this beats the Horner loop out to about 40 characters, where the
+// O(C^2) multiply count catches up with Horner's O(C^2/10) 128-bit multiplies.
+// `MAT_MAX_CHARS` is nonetheless 24, which is lower, because the threshold was
+// then measured through the public API rather than in isolation: carrying arms
+// out to 40 made `decode_payload` big enough to hurt its own inlining, and
+// 22-character inputs got *slower* (25.9ns) than with the shorter table
+// (21.5ns). Outlining the dispatch to shrink the caller was also tried and was
+// worse still, since short inputs then pay a call they cannot amortise.
+//
+// Both numbers are from a Coffee Lake i7-8750H. Re-measure before moving this.
+
+/// Longest payload, in characters, handled by the matrix path.
+const MAT_MAX_CHARS: usize = 24;
+/// Exponents of 58^4 the weight table covers: up to 58^20 for 24 characters.
+const MAT_MAXE: usize = 6;
+/// Base-2^32 limbs in the widest value, 58^24 - 1.
+const MAT_MAXL: usize = 5;
+
+const P4: u64 = 11_316_496; // 58^4
+
+/// 58^(4e) in base 2^32, little-endian, for e = 0..`MAT_MAXE`.
+///
+/// Keyed by exponent rather than by `(R, row)` so every length shares one table
+/// instead of monomorphizing its own copy.
+#[allow(clippy::cast_possible_truncation)]
+const fn mat_weights() -> [[u32; MAT_MAXL]; MAT_MAXE] {
+    let mut table = [[0u32; MAT_MAXL]; MAT_MAXE];
+    let mut cur = [0u32; MAT_MAXL];
+    cur[0] = 1;
+    let mut exp = 0;
+    while exp < MAT_MAXE {
+        let mut limb = 0;
+        while limb < MAT_MAXL {
+            table[exp][limb] = cur[limb];
+            limb += 1;
+        }
+        // cur *= 58^4
+        let mut carry = 0u64;
+        let mut limb = 0;
+        while limb < MAT_MAXL {
+            let prod = cur[limb] as u64 * P4 + carry;
+            cur[limb] = prod as u32;
+            carry = prod >> 32;
+            limb += 1;
+        }
+        exp += 1;
+    }
+    table
+}
+
+static MAT_W: [[u32; MAT_MAXL]; MAT_MAXE] = mat_weights();
+
+/// Parses `C` characters into `R` base-58^4 digits, left-padded.
+///
+/// Only the first group can be partial. Every raw map byte is OR-ed into `bad`
+/// and the sign bit tested once at the end, so the per-character path has no
+/// branch, and the two halves of a group are combined independently so four
+/// lookups do not form a chain.
+#[inline]
+fn mat_parse<const C: usize, const R: usize>(
+    config: &Config,
+    src: &[u8],
+) -> Result<[u32; R], Error> {
+    debug_assert_eq!(src.len(), C);
+    let map = &config.decode_map;
+    let mut digits = [0u32; R];
+    let mut bad = 0u8;
+
+    let head = C - 4 * (R - 1);
+    let mut acc = 0u32;
+    let mut idx = 0;
+    while idx < head {
+        let val = map[src[idx] as usize];
+        bad |= val;
+        acc = acc * 58 + u32::from(val);
+        idx += 1;
+    }
+    digits[0] = acc;
+
+    let mut row = 1;
+    while row < R {
+        let at = head + 4 * (row - 1);
+        let c0 = map[src[at] as usize];
+        let c1 = map[src[at + 1] as usize];
+        let c2 = map[src[at + 2] as usize];
+        let c3 = map[src[at + 3] as usize];
+        bad |= c0 | c1 | c2 | c3;
+        digits[row] =
+            (u32::from(c0) * 58 + u32::from(c1)) * 3364 + u32::from(c2) * 58 + u32::from(c3);
+        row += 1;
+    }
+
+    if bad & 0x80 != 0 {
+        return Err(Error::InvalidCharacter);
+    }
+    Ok(digits)
+}
+
+/// Multiplies `R` digits by the weight matrix and normalizes to base-2^32 limbs.
+#[inline]
+#[allow(clippy::cast_possible_truncation)]
+fn mat_multiply<const R: usize, const L: usize>(d: &[u32; R]) -> [u32; MAT_MAXL] {
+    let mut acc = [0u64; MAT_MAXL];
+    for (r, &dr) in d.iter().enumerate() {
+        let x = u64::from(dr);
+        let row = &MAT_W[R - 1 - r];
+        for (a, &w) in acc[..L].iter_mut().zip(row[..L].iter()) {
+            *a += x * u64::from(w);
+        }
+    }
+
+    // Every column is under 2^60 and every carry under 2^28, so one pass is
+    // enough: no second sweep, and nothing to divide by.
+    let mut limb = [0u32; MAT_MAXL];
+    let mut carry = 0u64;
+    for (slot, &col) in limb[..L].iter_mut().zip(acc[..L].iter()) {
+        let val = col + carry;
+        carry = val >> 32;
+        *slot = val as u32;
+    }
+    debug_assert_eq!(carry, 0);
+    limb
+}
+
+/// Writes `limb` (little-endian base 2^32) into `dst` as big-endian bytes.
+///
+/// `NBMIN` is the shortest output any valid payload of this character count can
+/// produce. Since 58 < 256 the longest is `NBMIN + 1`, so the length costs one
+/// `leading_zeros` and both likely copies are constant-size. The general arm
+/// exists for correctness — a caller that has not stripped leading zero
+/// characters can land there — not for speed.
+#[inline]
+fn mat_emit<const L: usize, const NBMIN: usize>(
+    limb: &[u32; MAT_MAXL],
+    dst: &mut [u8],
+) -> Result<usize, Error> {
+    let mut be = [0u8; 4 * MAT_MAXL];
+    for (chunk, &word) in be[..4 * L].chunks_exact_mut(4).zip(limb[..L].iter().rev()) {
+        chunk.copy_from_slice(&word.to_be_bytes());
+    }
+
+    let mut top = L - 1;
+    while top > 0 && limb[top] == 0 {
+        top -= 1;
+    }
+    let nb = 4 * top + 4 - (limb[top].leading_zeros() / 8) as usize;
+
+    if nb > dst.len() {
+        return Err(Error::BufferTooSmall);
+    }
+    if nb == NBMIN {
+        dst[..NBMIN].copy_from_slice(&be[4 * L - NBMIN..4 * L]);
+    } else if nb == NBMIN + 1 {
+        dst[..=NBMIN].copy_from_slice(&be[4 * L - NBMIN - 1..4 * L]);
+    } else {
+        dst[..nb].copy_from_slice(&be[4 * L - nb..4 * L]);
+    }
+    Ok(nb)
+}
+
+#[inline]
+fn mat_run<const C: usize, const R: usize, const L: usize, const NBMIN: usize>(
+    config: &Config,
+    src: &[u8],
+    dst: &mut [u8],
+) -> Result<usize, Error> {
+    let d = mat_parse::<C, R>(config, src)?;
+    let limb = mat_multiply::<R, L>(&d);
+    mat_emit::<L, NBMIN>(&limb, dst)
+}
+
+/// Dispatches to a monomorphized kernel per character count.
+///
+/// The trip counts have to be compile-time for LLVM to unroll and to fold the
+/// triangular zeros; passing `R` and `L` as runtime values measured about twice
+/// as slow on the encode side of this crate.
+macro_rules! mat_dispatch {
+    ($cfg:expr, $src:expr, $dst:expr, $n:expr,
+     $( ($C:literal, $R:literal, $L:literal, $NB:literal) ),* $(,)?) => {
+        match $n {
+            $( $C => return mat_run::<$C, $R, $L, $NB>($cfg, $src, $dst), )*
+            _ => {}
+        }
+    };
+}
+
 /// Decodes the payload into the destination buffer.
 /// Returns the number of bytes written.
 #[inline]
 fn decode_payload(config: &Config, src: &[u8], dst: &mut [u8]) -> Result<usize, Error> {
+    #[cfg(all(feature = "unsafe-simd", target_arch = "x86_64"))]
+    {
+        if let Some(r) = crate::simd::decode_payload(config, src, dst) {
+            return r;
+        }
+    }
+
+    if src.len() <= MAT_MAX_CHARS {
+        mat_dispatch!(
+            config, src, dst, src.len(),
+(1,1,1,1), (2,1,1,1), (3,1,1,2), (4,1,1,3), (5,2,1,3),
+            (6,2,2,4), (7,2,2,5), (8,2,2,6), (9,3,2,6), (10,3,2,7),
+            (11,3,3,8), (12,3,3,9), (13,4,3,9), (14,4,3,10), (15,4,3,11),
+            (16,4,3,11), (17,5,4,12), (18,5,4,13), (19,5,4,14), (20,5,4,14),
+            (21,6,4,15), (22,6,5,16), (23,6,5,17), (24,6,5,17)
+        );
+    }
+
     // Scratch sized for the length class, so the zeroing cost stays proportional
     // to the work being done.
     match src.len() {

@@ -5,6 +5,9 @@
 //! [![License](https://img.shields.io/github/license/hacer-bark/base58-turbo)](https://github.com/hacer-bark/base58-turbo/blob/main/LICENSE-APACHE)
 //! [![Unsafe forbidden](https://img.shields.io/badge/unsafe-forbidden-success.svg)](https://github.com/rust-secure-code/safety-dance/)
 //!
+//! *(`unsafe` is forbidden in the default build; the optional `unsafe-simd`
+//! feature confines it to a single AVX2 module.)*
+//!
 //! A high-performance Base58 encoder/decoder for Rust, optimized for high-throughput systems.
 //!
 //! This crate provides highly optimized scalar kernels for encoding and decoding,
@@ -51,23 +54,39 @@
 //! |---------|---------|-------------|
 //! | **`serde`** | **No** | Enables `serde` serialization/deserialization for Config and Engine. |
 //! | **`std`** | **Yes** | Enables `String` and `Vec` support. Disable this for `no_std` environments. |
+//! | **`unsafe-simd`** | **No** | AVX2 encoding and decoding kernels on x86-64, selected at runtime. |
 //!
 //! ## Safety & Verification
 //!
-//! This crate is `#![forbid(unsafe_code)]`: the compiler rejects any `unsafe` block
-//! anywhere in the crate. Performance comes from the base conversion algorithm and
-//! from shaping the hot loops so the compiler can drop bounds checks on its own,
-//! not from bypassing them.
+//! By default this crate is `#![forbid(unsafe_code)]`: the compiler rejects any
+//! `unsafe` block anywhere in the crate. Performance comes from the base conversion
+//! algorithm and from shaping the hot loops so the compiler can drop bounds checks
+//! on its own, not from bypassing them.
+//!
+//! Enabling **`unsafe-simd`** relaxes that to allow one module, `src/simd.rs`,
+//! which holds the AVX2 kernels and is the only `unsafe` in the crate. The
+//! kernels are reached only after a runtime AVX2 check, so a binary built with
+//! the feature still runs correctly on hardware without it, and every other
+//! target keeps the scalar path. If you need the absolute guarantee, leave the
+//! feature off and the `forbid` stands.
 //!
 //! *   **Tests:** exact conformance vectors, every kernel-dispatch and scratch-buffer
 //!     boundary, and randomized cross-validation against `bs58`, `base58`, `five8`,
 //!     and `base58-monero` (see `tests/`).
+//! *   **SIMD parity:** with `unsafe-simd` on, the AVX2 kernels are checked
+//!     against an independent schoolbook implementation for every leading-zero
+//!     run length and across several alphabets, and the batch entry point is
+//!     checked against the single-input one.
 //! *   **Fuzzing:** `fuzz/fuzz_targets/fuzz_all_modes.rs` exercises encode/decode
 //!     round-trips via `cargo fuzz`.
 
 #![cfg_attr(not(any(feature = "std", test)), no_std)]
 #![doc(issue_tracker_base_url = "https://github.com/hacer-bark/base58-turbo/issues/")]
-#![forbid(unsafe_code, elided_lifetimes_in_paths)]
+#![cfg_attr(
+    not(all(feature = "unsafe-simd", target_arch = "x86_64")),
+    forbid(unsafe_code)
+)]
+#![forbid(elided_lifetimes_in_paths)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 #[cfg(all(doctest, feature = "std"))]
@@ -82,6 +101,9 @@ pub mod xmr;
 
 pub mod decode;
 pub mod encode;
+
+#[cfg(all(feature = "unsafe-simd", target_arch = "x86_64"))]
+mod simd;
 use decode::decode_slice;
 #[cfg(feature = "std")]
 use decode::decode_slice_unbounded;
@@ -329,6 +351,78 @@ impl Engine {
     #[must_use]
     pub const fn config(&self) -> &Config {
         &self.config
+    }
+
+    /// Encodes a batch of 32-byte inputs, three encodes in flight at a time.
+    ///
+    /// Requires the `unsafe-simd` feature and AVX2 at runtime; without either it
+    /// falls back to [`Engine::encode_into`] per input, so results are identical
+    /// either way.
+    ///
+    /// Each output record is a fixed 44 bytes, the longest a 32-byte input can
+    /// encode to. `lens[i]` gives the meaningful length of `out[i]`, so the text
+    /// for input `i` is `&out[i][..lens[i] as usize]`.
+    ///
+    /// A single encode is limited by its own dependency chain rather than by
+    /// throughput, so interleaving independent inputs is worth roughly 15% per
+    /// input over encoding them one at a time.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::BufferTooSmall`] if `out` or `lens` is shorter than
+    /// `inputs`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use base58_turbo::BITCOIN;
+    ///
+    /// let inputs = [[7u8; 32], [9u8; 32]];
+    /// let mut out = [[0u8; 44]; 2];
+    /// let mut lens = [0u8; 2];
+    ///
+    /// BITCOIN.encode_32_batch(&inputs, &mut out, &mut lens).unwrap();
+    /// let first = std::str::from_utf8(&out[0][..lens[0] as usize]).unwrap();
+    /// assert_eq!(first, BITCOIN.encode(&inputs[0]).unwrap());
+    /// ```
+    #[cfg(feature = "std")]
+    pub fn encode_32_batch(
+        &self,
+        inputs: &[[u8; 32]],
+        out: &mut [[u8; 44]],
+        lens: &mut [u8],
+    ) -> Result<(), Error> {
+        if out.len() < inputs.len() || lens.len() < inputs.len() {
+            return Err(Error::BufferTooSmall);
+        }
+
+        #[cfg(all(feature = "unsafe-simd", target_arch = "x86_64"))]
+        {
+            if crate::simd::avx2_available() {
+                // SAFETY: AVX2 was just confirmed present, and the length checks
+                // above guarantee `out` and `lens` cover every input.
+                unsafe {
+                    let tabs = crate::simd::AlphaTables::new(&self.config);
+                    crate::simd::encode_32_x3(
+                        inputs,
+                        &tabs,
+                        self.config.alphabet[0],
+                        &mut out[..inputs.len()],
+                        &mut lens[..inputs.len()],
+                    );
+                }
+                return Ok(());
+            }
+        }
+
+        for (i, input) in inputs.iter().enumerate() {
+            // A 32-byte input never encodes to more than 44 characters.
+            #[allow(clippy::cast_possible_truncation)]
+            {
+                lens[i] = self.encode_into(input, &mut out[i])? as u8;
+            }
+        }
+        Ok(())
     }
 
     // ======================================================================

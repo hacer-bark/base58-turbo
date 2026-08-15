@@ -554,3 +554,373 @@ fn test_serde_config_engine() {
     let res_eng: Result<Engine, _> = serde_json::from_str(&format!("\"{bad_alpha_str}\""));
     assert!(res_eng.is_err());
 }
+
+// ======================================================================
+// AVX2 parity (feature `unsafe-simd`)
+// ======================================================================
+
+/// The AVX2 kernel must agree with the scalar one on every 32-byte input,
+/// including the zero-prefixed shapes that change the output length.
+#[test]
+fn simd_matches_scalar_for_32_byte_inputs() {
+    fn xs(s: &mut u64) -> u64 {
+        *s ^= *s << 13;
+        *s ^= *s >> 7;
+        *s ^= *s << 17;
+        *s
+    }
+    let mut s = 0x243F_6A88_85A3_08D3u64;
+    let engines = [BITCOIN, RIPPLE, FLICKR];
+
+    for engine in engines {
+        // Every leading-zero-run length, including all-zero.
+        for z in 0..=32usize {
+            for _ in 0..64 {
+                let mut d = [0u8; 32];
+                for k in z..32 {
+                    d[k] = (xs(&mut s) >> 24) as u8;
+                }
+                if z < 32 && d[z] == 0 {
+                    d[z] = 1; // keep the run length exactly z
+                }
+                let want = reference_base58(&d, engine.config().alphabet);
+                assert_eq!(engine.encode(&d).unwrap(), want, "z={z} data={d:?}");
+                assert_eq!(engine.decode(&want).unwrap(), d, "roundtrip z={z}");
+            }
+        }
+        // Boundary values.
+        for d in [[0u8; 32], [0xffu8; 32], {
+            let mut v = [0u8; 32];
+            v[31] = 1;
+            v
+        }] {
+            let want = reference_base58(&d, engine.config().alphabet);
+            assert_eq!(engine.encode(&d).unwrap(), want, "boundary {d:?}");
+        }
+        // Bulk random.
+        for _ in 0..20_000 {
+            let d: [u8; 32] = core::array::from_fn(|_| (xs(&mut s) >> 24) as u8);
+            assert_eq!(
+                engine.encode(&d).unwrap(),
+                reference_base58(&d, engine.config().alphabet)
+            );
+        }
+    }
+}
+
+#[test]
+fn simd_batch_matches_single() {
+    fn xs(s: &mut u64) -> u64 {
+        *s ^= *s << 13;
+        *s ^= *s >> 7;
+        *s ^= *s << 17;
+        *s
+    }
+    let mut s = 0xDEAD_BEEF_1234_5678u64;
+    // Sizes around the 3-wide stride so the scalar remainder path is covered.
+    for n in [0usize, 1, 2, 3, 4, 5, 6, 7, 8, 17, 64] {
+        let inputs: Vec<[u8; 32]> = (0..n)
+            .map(|i| {
+                core::array::from_fn(|k| {
+                    if i % 5 == 0 && k < i % 4 {
+                        0
+                    } else {
+                        (xs(&mut s) >> 24) as u8
+                    }
+                })
+            })
+            .collect();
+        let mut out = vec![[0u8; 44]; n.max(1)];
+        let mut lens = vec![0u8; n.max(1)];
+        BITCOIN
+            .encode_32_batch(&inputs, &mut out, &mut lens)
+            .unwrap();
+        for (i, input) in inputs.iter().enumerate() {
+            let got = std::str::from_utf8(&out[i][..lens[i] as usize]).unwrap();
+            assert_eq!(got, BITCOIN.encode(input).unwrap(), "n={n} i={i}");
+        }
+    }
+    // Undersized buffers are rejected, not written past.
+    let inputs = [[1u8; 32]; 4];
+    let mut out = [[0u8; 44]; 2];
+    let mut lens = [0u8; 4];
+    assert_eq!(
+        BITCOIN.encode_32_batch(&inputs, &mut out, &mut lens),
+        Err(Error::BufferTooSmall)
+    );
+}
+
+/// The 64-byte AVX2 kernel must agree with the scalar one everywhere too.
+#[test]
+fn simd_matches_scalar_for_64_byte_inputs() {
+    fn xs(s: &mut u64) -> u64 {
+        *s ^= *s << 13;
+        *s ^= *s >> 7;
+        *s ^= *s << 17;
+        *s
+    }
+    let mut s = 0x0BAD_C0DE_F00D_1337u64;
+    for engine in [BITCOIN, RIPPLE, FLICKR] {
+        for z in 0..=64usize {
+            for _ in 0..24 {
+                let mut d = [0u8; 64];
+                for k in z..64 {
+                    d[k] = (xs(&mut s) >> 24) as u8;
+                }
+                if z < 64 && d[z] == 0 {
+                    d[z] = 1;
+                }
+                let want = reference_base58(&d, engine.config().alphabet);
+                assert_eq!(engine.encode(&d).unwrap(), want, "z={z}");
+                assert_eq!(engine.decode(&want).unwrap(), d, "roundtrip z={z}");
+            }
+        }
+        for d in [[0u8; 64], [0xffu8; 64], {
+            let mut v = [0u8; 64];
+            v[63] = 1;
+            v
+        }] {
+            assert_eq!(
+                engine.encode(&d).unwrap(),
+                reference_base58(&d, engine.config().alphabet)
+            );
+        }
+        for _ in 0..20_000 {
+            let d: [u8; 64] = core::array::from_fn(|_| (xs(&mut s) >> 24) as u8);
+            assert_eq!(
+                engine.encode(&d).unwrap(),
+                reference_base58(&d, engine.config().alphabet)
+            );
+        }
+    }
+}
+
+/// The wide SIMD stores must stay inside a destination sized to exactly
+/// `encoded_len`, which is the contract `encode_into` enforces.
+#[test]
+fn simd_respects_exact_output_buffers() {
+    fn xs(s: &mut u64) -> u64 {
+        *s ^= *s << 13;
+        *s ^= *s >> 7;
+        *s ^= *s << 17;
+        *s
+    }
+    let mut s = 0xFEED_FACE_CAFE_D00Du64;
+    for len in [32usize, 64] {
+        let cap = BITCOIN.encoded_len(len);
+        for i in 0..4000 {
+            // Mix in zero-prefixed inputs, which take the narrow store path.
+            let z = if i % 8 == 0 { i % len } else { 0 };
+            let data: Vec<u8> = (0..len)
+                .map(|k| if k < z { 0 } else { (xs(&mut s) >> 24) as u8 })
+                .collect();
+            let mut buf = vec![0xAAu8; cap + 8];
+            let n = BITCOIN.encode_into(&data, &mut buf[..cap]).unwrap();
+            assert_eq!(
+                std::str::from_utf8(&buf[..n]).unwrap(),
+                BITCOIN.encode(&data).unwrap(),
+                "len={len} z={z}"
+            );
+            assert!(
+                buf[cap..].iter().all(|&b| b == 0xAA),
+                "wrote past a buffer of exactly encoded_len ({cap}) for len={len} z={z}"
+            );
+        }
+    }
+}
+
+/// Independent schoolbook base-256 -> base-58 conversion.
+fn reference_base58(input: &[u8], alphabet: [u8; 58]) -> String {
+    let zeros = input.iter().take_while(|&&b| b == 0).count();
+    let mut digits: Vec<u8> = Vec::new();
+    for &byte in &input[zeros..] {
+        let mut carry = u32::from(byte);
+        for d in digits.iter_mut() {
+            let v = u32::from(*d) * 256 + carry;
+            *d = (v % 58) as u8;
+            carry = v / 58;
+        }
+        while carry > 0 {
+            digits.push((carry % 58) as u8);
+            carry /= 58;
+        }
+    }
+    let mut out = String::new();
+    for _ in 0..zeros {
+        out.push(alphabet[0] as char);
+    }
+    for &d in digits.iter().rev() {
+        out.push(alphabet[d as usize] as char);
+    }
+    out
+}
+
+// ----------------------------------------------------------------------
+// Decoder: differential tests for the weight-matrix paths
+// ----------------------------------------------------------------------
+//
+// Decoding short payloads goes through a flat weight matrix rather than the
+// bignum Horner loop, and with `unsafe-simd` a further AVX2 kernel handles
+// 32..=128 characters. Both are checked here against a schoolbook reference
+// that shares no code with either.
+
+/// Schoolbook base-58 decode: repeated multiply-accumulate over base-256 bytes.
+fn reference_decode(input: &[u8], config: &Config) -> Option<Vec<u8>> {
+    let zero = config.alphabet[0];
+    let lz = input.iter().take_while(|&&b| b == zero).count();
+    let mut num: Vec<u8> = vec![0];
+    for &ch in &input[lz..] {
+        let d = config.decode_map[ch as usize];
+        if d & 0x80 != 0 {
+            return None;
+        }
+        let mut carry = u32::from(d);
+        for byte in num.iter_mut().rev() {
+            let v = u32::from(*byte) * 58 + carry;
+            *byte = v as u8;
+            carry = v >> 8;
+        }
+        while carry > 0 {
+            num.insert(0, carry as u8);
+            carry >>= 8;
+        }
+    }
+    let start = num.iter().position(|&b| b != 0).unwrap_or(num.len());
+    let mut out = vec![0u8; lz];
+    out.extend_from_slice(&num[start..]);
+    Some(out)
+}
+
+fn decode_test_engines() -> Vec<Engine> {
+    vec![
+        BITCOIN,
+        RIPPLE,
+        FLICKR,
+        // A shuffled alphabet, so nothing can depend on the standard ordering.
+        Engine::new(b"zyxwvutsrqponmkjihgfedcba987654321ZYXWVUTSRQPNMLKJHGFEDCBA").unwrap(),
+    ]
+}
+
+#[test]
+fn decode_matrix_matches_reference_exhaustively() {
+    fn xs(s: &mut u64) -> u64 {
+        *s ^= *s << 13;
+        *s ^= *s >> 7;
+        *s ^= *s << 17;
+        *s
+    }
+    let mut s = 0x1234_5678_9abc_def0u64;
+
+    for engine in decode_test_engines() {
+        let cfg = engine.config();
+        // Every payload length across both matrix paths and past their ceiling,
+        // crossed with every leading-zero run length.
+        for len in 0..=136usize {
+            for zeros in 0..=len.min(4) {
+                for trial in 0..12 {
+                    let mut input = vec![cfg.alphabet[0]; zeros];
+                    for _ in zeros..len {
+                        // Trials 0 and 1 pin the extremes: an all-max payload
+                        // exercises the top carry out of the matrix, an all-min
+                        // one exercises the shortest output.
+                        let idx = match trial {
+                            0 => 57,
+                            1 => 1,
+                            _ => ((xs(&mut s) >> 33) % 58) as usize,
+                        };
+                        input.push(cfg.alphabet[idx]);
+                    }
+                    let want = reference_decode(&input, cfg).unwrap();
+                    assert_eq!(
+                        engine.decode(&input).unwrap(),
+                        want,
+                        "len={len} zeros={zeros} trial={trial}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn decode_matrix_rejects_invalid_characters() {
+    for engine in decode_test_engines() {
+        let cfg = engine.config();
+        // An invalid byte at every position, at every length: the vector path
+        // validates 32 characters at a time and the scalar head separately, so
+        // position matters.
+        for len in 1..=136usize {
+            for pos in 0..len {
+                let mut input = vec![cfg.alphabet[7]; len];
+                for bad in [0x00u8, 0x2f, 0x30, 0x7f, 0x80, 0xff] {
+                    if cfg.decode_map[bad as usize] & 0x80 == 0 {
+                        continue; // actually valid in this alphabet
+                    }
+                    input[pos] = bad;
+                    assert_eq!(
+                        engine.decode(&input).unwrap_err(),
+                        Error::InvalidCharacter,
+                        "len={len} pos={pos} byte={bad:#04x}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn decode_matrix_respects_exact_output_buffers() {
+    for engine in decode_test_engines() {
+        let cfg = engine.config();
+        for len in 1..=136usize {
+            let input: Vec<u8> = (0..len).map(|i| cfg.alphabet[(i * 7 + 3) % 58]).collect();
+            let want = reference_decode(&input, cfg).unwrap();
+
+            // `decode_into` contracts on `decoded_len`, an upper bound, so the
+            // tightest legal buffer is that — with a guard byte past the end.
+            let cap = engine.decoded_len(input.len());
+            let mut buf = vec![0xAAu8; cap + 1];
+            let n = engine.decode_into(&input, &mut buf[..cap]).unwrap();
+            assert_eq!(&buf[..n], &want[..], "len={len}");
+            assert_eq!(buf[cap], 0xAA, "overran at len={len}");
+
+            // Anything smaller must be refused, not truncated.
+            if cap > 0 {
+                assert_eq!(
+                    engine.decode_into(&input, &mut buf[..cap - 1]),
+                    Err(Error::BufferTooSmall),
+                    "len={len}"
+                );
+            }
+
+            // The kernel itself takes a buffer sized to the *actual* output.
+            // This is what catches a one-byte overrun from the constant-size
+            // copies in the emit tail, which `decoded_len`'s slack would hide.
+            let mut tight = vec![0xAAu8; want.len() + 1];
+            let n = base58_turbo::decode::decode_slice(&input, &mut tight[..want.len()], cfg)
+                .unwrap();
+            assert_eq!(&tight[..n], &want[..], "tight len={len}");
+            assert_eq!(tight[want.len()], 0xAA, "tight overran at len={len}");
+        }
+    }
+}
+
+#[test]
+fn decode_matrix_round_trips_random_payloads() {
+    fn xs(s: &mut u64) -> u64 {
+        *s ^= *s << 13;
+        *s ^= *s >> 7;
+        *s ^= *s << 17;
+        *s
+    }
+    let mut s = 0xF00D_BA5E_0BAD_C0DEu64;
+    for engine in decode_test_engines() {
+        for len in 0..=100usize {
+            for _ in 0..40 {
+                let data: Vec<u8> = (0..len).map(|_| (xs(&mut s) >> 33) as u8).collect();
+                let encoded = engine.encode(&data).unwrap();
+                assert_eq!(engine.decode(&encoded).unwrap(), data, "len={len}");
+            }
+        }
+    }
+}

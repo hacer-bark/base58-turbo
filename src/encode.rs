@@ -386,6 +386,51 @@ fn matrix_64(src: &[u8; 64]) -> [u64; 19] {
     acc
 }
 
+/// Encodes 32 bytes, taking the AVX2 kernel when the feature is on and the CPU
+/// supports it.
+///
+/// `src` never starts with a zero byte here: [`encode_slice`] strips the leading
+/// zero run before dispatching, which is what lets the AVX2 kernel assume an
+/// output of 43 or 44 characters.
+#[inline]
+fn encode_fixed_32(src: &[u8; 32], dst: &mut [u8], config: &Config) -> usize {
+    #[cfg(all(feature = "unsafe-simd", target_arch = "x86_64"))]
+    {
+        if dst.len() >= 44 && crate::simd::avx2_available() {
+            // SAFETY: AVX2 was just confirmed present, `dst` holds at least the
+            // 44 bytes the kernel writes, and `src[0] != 0` as documented above.
+            return unsafe {
+                let tabs = crate::simd::AlphaTables::new(config);
+                crate::simd::encode_32(src, &tabs, dst)
+            };
+        }
+    }
+    let mut digits = [0u64; 5];
+    let n = process_fixed_32(src, &mut digits);
+    write_digits_to_string(config, &digits[..n], dst)
+}
+
+/// Encodes 64 bytes, taking the AVX2 kernel when available.
+///
+/// As with [`encode_fixed_32`], `src` never starts with a zero byte here.
+#[inline]
+fn encode_fixed_64(src: &[u8; 64], dst: &mut [u8], config: &Config) -> usize {
+    #[cfg(all(feature = "unsafe-simd", target_arch = "x86_64"))]
+    {
+        if dst.len() >= 88 && crate::simd::avx2_available() {
+            // SAFETY: AVX2 confirmed present, `dst` holds the 88 bytes the
+            // kernel writes, and `src[0] != 0` as documented above.
+            return unsafe {
+                let tabs = crate::simd::AlphaTables::new(config);
+                crate::simd::encode_64_full(src, &tabs, config.alphabet[0], dst)
+            };
+        }
+    }
+    let mut digits = [0u64; 10];
+    let n = process_fixed_64(src, &mut digits);
+    write_digits_to_string(config, &digits[..n], dst)
+}
+
 /// Optimized kernel for 64 bytes.
 #[inline]
 fn process_fixed_64(src: &[u8; 64], out_digits: &mut [u64; 10]) -> usize {
@@ -895,6 +940,33 @@ pub fn encode_slice(input: &[u8], dst: &mut [u8], config: &Config) -> Result<usi
         return Err(Error::InputTooBig);
     }
 
+    // 32 bytes is the dominant real-world size (keys, hashes). Take it before
+    // the generic preamble: the AVX2 kernel counts the leading zero run with a
+    // single movemask, so `write_leading_zeros` would be wasted work.
+    #[cfg(all(feature = "unsafe-simd", target_arch = "x86_64"))]
+    {
+        if crate::simd::avx2_available() {
+            if input.len() == 32 && dst.len() >= 44 {
+                let src: &[u8; 32] = input.try_into().unwrap_or_else(|_| unreachable!());
+                // SAFETY: AVX2 was just confirmed present and `dst` holds the 44
+                // bytes the kernel may write.
+                return Ok(unsafe {
+                    let tabs = crate::simd::AlphaTables::new(config);
+                    crate::simd::encode_32_full(src, &tabs, config.alphabet[0], dst)
+                });
+            }
+            if input.len() == 64 && dst.len() >= 88 {
+                let src: &[u8; 64] = input.try_into().unwrap_or_else(|_| unreachable!());
+                // SAFETY: AVX2 was just confirmed present and `dst` holds the 88
+                // bytes the kernel may write.
+                return Ok(unsafe {
+                    let tabs = crate::simd::AlphaTables::new(config);
+                    crate::simd::encode_64_full(src, &tabs, config.alphabet[0], dst)
+                });
+            }
+        }
+    }
+
     let zeros = write_leading_zeros(input, dst, config.alphabet[0]);
 
     let src = &input[zeros..];
@@ -913,16 +985,12 @@ pub fn encode_slice(input: &[u8], dst: &mut [u8], config: &Config) -> Result<usi
             write_digits_to_string(config, &digits[..n], dst)
         }
         32 => {
-            let mut digits = [0u64; 5];
             let src: &[u8; 32] = src.try_into().unwrap_or_else(|_| unreachable!());
-            let n = process_fixed_32(src, &mut digits);
-            write_digits_to_string(config, &digits[..n], dst)
+            encode_fixed_32(src, dst, config)
         }
         64 => {
-            let mut digits = [0u64; 10];
             let src: &[u8; 64] = src.try_into().unwrap_or_else(|_| unreachable!());
-            let n = process_fixed_64(src, &mut digits);
-            write_digits_to_string(config, &digits[..n], dst)
+            encode_fixed_64(src, dst, config)
         }
         // Every other length up to 64 bytes goes through the matrix kernel,
         // dispatched on its word count so W and D are compile-time constants.
