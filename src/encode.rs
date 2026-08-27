@@ -1376,3 +1376,118 @@ mod tests {
         }
     }
 }
+
+/// Kani proof harnesses for individual encoder kernels.
+///
+/// Compiled only under the Kani model checker (`cargo kani`), never by a
+/// normal build or `cargo test`. Run with `cargo kani` or
+/// `cargo kani --harness <name>`; `cargo kani list` shows harness names.
+///
+/// Each harness calls a private kernel function directly with a fixed-size
+/// array input, so the length stays a compile-time constant all the way
+/// through -- unlike going through the public `Engine::encode_into` /
+/// `T: AsRef<[u8]>` entry point, whose trait dispatch was observed to erase
+/// that constant-ness for CBMC and send `write_leading_zeros`'s loop
+/// unwinding without bound. Verifying one kernel at a time like this also
+/// keeps each proof's state space small: a single harness that round-tripped
+/// the whole public pipeline OOM'd.
+///
+/// Scope, for now: encoder only.
+#[cfg(kani)]
+mod kani_tests {
+    use super::*;
+
+    /// `write_leading_zeros` must report the true leading-zero-byte count of
+    /// its input and have written exactly that many `z_char` bytes at the
+    /// front of `dst` -- for every length from 0 to 64 bytes, and for every
+    /// one of the `2^(8*len)` possible inputs at that length. The backing
+    /// array is a fixed `[u8; 64]`; `len` is a symbolic bound on how much of
+    /// it -- and of `input`'s content -- is actually exercised, so this one
+    /// harness sweeps every length in range rather than checking isolated
+    /// points.
+    #[kani::proof]
+    #[kani::unwind(72)]
+    fn write_leading_zeros_is_correct_for_all_lengths_0_to_64() {
+        let full: [u8; 64] = kani::any();
+        let len: usize = kani::any();
+        kani::assume(len <= 64);
+
+        let input = &full[..len];
+        let mut dst: [u8; 64] = kani::any();
+        let z_char: u8 = kani::any();
+
+        let zeros = write_leading_zeros(input, &mut dst[..len], z_char);
+
+        // Reference: a plain scan for the leading-zero-byte run length.
+        let mut expected = 0usize;
+        while expected < len && input[expected] == 0 {
+            expected += 1;
+        }
+
+        assert_eq!(zeros, expected, "len={len}");
+        for i in 0..zeros {
+            assert_eq!(dst[i], z_char, "len={len} i={i}");
+        }
+    }
+
+    /// `process_fixed_32`'s output feeds `write_digits_to_string` through
+    /// `digit_len` and `emit_partial_block`, both of which assume every digit
+    /// is a valid Base 58^10 value (`< 58^10`). This is that assumption,
+    /// proved for every one of the `2^256` possible 32-byte inputs, not just
+    /// the ones a random-sampling test happens to hit.
+    #[kani::proof]
+    #[kani::unwind(10)]
+    fn process_fixed_32_digits_are_in_range() {
+        let src: [u8; 32] = kani::any();
+        let mut digits = [0u64; 5];
+        let n = process_fixed_32(&src, &mut digits);
+
+        assert!(n == 4 || n == 5, "a 32-byte value packs into 4 or 5 digits");
+        let radix_58_10 = POW_58[9] * 58;
+        for &d in &digits[..n] {
+            assert!(d < radix_58_10, "digit must fit in 10 base-58 characters");
+        }
+    }
+
+    /// `matrix_64`'s carry-select sweep (`sweep_64`) must leave every one of
+    /// the 18 live digits normalized below the radix, and the two padding
+    /// lanes at zero -- the same invariant its own `debug_assert_eq!`s check,
+    /// proved here for every 64-byte input rather than only the ones a
+    /// debug-mode test run happens to cover.
+    #[kani::proof]
+    #[kani::unwind(20)]
+    fn matrix_64_digits_are_normalized() {
+        let src: [u8; 64] = kani::any();
+        let acc = matrix_64(&src);
+        let digits = acc.as_flattened();
+
+        for (k, &d) in digits.iter().enumerate() {
+            if k < G_PAD {
+                assert_eq!(d, 0, "padding lanes must stay zero");
+            } else {
+                assert!(
+                    d < RADIX_58_5,
+                    "digit {k} must be normalized below the radix"
+                );
+            }
+        }
+    }
+
+    /// `digit_len` must return the exact number of Base58 characters `val`
+    /// needs, for every possible `u64`: `POW_58[n-1] <= val < POW_58[n]`,
+    /// with the top class clamped at 10 characters (a Base 58^10 digit is
+    /// always `< 58^10`, `digit_len`'s documented ceiling).
+    #[kani::proof]
+    fn digit_len_is_exact_for_all_u64() {
+        let val: u64 = kani::any();
+        let n = digit_len(val);
+
+        assert!((1..=10).contains(&n));
+        if n > 1 {
+            assert!(val >= POW_58[n - 1], "n={n} too large for val={val}");
+        }
+        if n < 10 {
+            assert!(val < POW_58[n], "n={n} too small for val={val}");
+        }
+    }
+}

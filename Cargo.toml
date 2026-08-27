@@ -8,7 +8,6 @@ authors = ["Hacer-Bark <hacer.bark@proton.me>"]
 license = "0BSD"
 description = "A Rust Base58 codec that decodes past 2 GiB/s, 100% safe Rust."
 repository = "https://github.com/hacer-bark/base58-turbo"
-homepage = "https://github.com/hacer-bark/base58-turbo"
 documentation = "https://docs.rs/base58-turbo"
 keywords = ["base58", "encoding", "decoding", "performance", "crypto"]
 categories = ["encoding", "cryptography", "no-std"]
@@ -28,18 +27,19 @@ base58-monero = "2"
 
 [lints.rust]
 warnings = "deny"
-future_incompatible = "deny"
-unused = "deny"
+future_incompatible = { level = "deny", priority = -1 }
+unused = { level = "deny", priority = -1 }
 missing_docs = "deny"
 missing_debug_implementations = "deny"
 unreachable_pub = "deny"
 unsafe_code = "deny"
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
 
 [lints.clippy]
-all = "deny"
-pedantic = "deny"
-nursery = "deny"
-cargo = "deny"
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+nursery = { level = "deny", priority = -1 }
+cargo = { level = "deny", priority = -1 }
 unwrap_used = "deny"
 expect_used = "deny"
 panic = "deny"
