@@ -2,12 +2,25 @@
 //!
 //! [`decode_slice`] is the zero-allocation primitive behind [`crate::Engine::decode_into`].
 //! Prefer the [`crate::Engine`] methods unless you specifically need this unchecked entry point.
+//!
+//! Both kernels below read characters through [`crate::Config::lut_58_pow`], which
+//! stores `digit(b) * 58^k` for `k` in 0..4. A group of four characters is then a
+//! plain sum of four table entries: the positional weight is already folded into
+//! the lookup, so the group costs three adds instead of three multiplies, and the
+//! sum doubles as the validity check (see [`crate::BAD_DIGIT`]). Only the
+//! cross-group weights, which are larger than 58^3, are still multiplies.
 
-use crate::{Config, Error};
+use crate::{BAD_DIGIT, Config, Error};
 
 // ----------------------------------------------------------------------
 // Constants & Lookups
 // ----------------------------------------------------------------------
+
+/// 58^4, the weight of one full character group.
+const P4: u64 = 11_316_496;
+
+/// 58^k for k = 0..4, used to weight a partial group.
+const POW58: [u64; 4] = [1, 58, 3364, 195_112];
 
 /// Base 58^10 (~4.3 * 10^17).
 /// This fits in a u64, allowing us to process 10 characters per bignum iteration.
@@ -25,6 +38,29 @@ const LARGE_WORDS: usize = 132; // <= 2048 chars
 const MAX_WORDS: usize = 128;
 
 const _: () = assert!(MAX_WORDS + 2 <= LARGE_WORDS, "large class too tight");
+
+/// Any bit at or above this one in a group sum means the group held a character
+/// outside the alphabet.
+///
+/// The group-of-four parse sums four `lut_58_pow` entries and tests against this
+/// once. That is only a valid-character check while the three assertions below
+/// hold, so they are asserted rather than left as a comment.
+const GROUP_BAD: u32 = 1 << 26;
+/// Largest sum four in-alphabet [`crate::Config::lut_58_pow`] entries can reach.
+const GROUP_MAX: u32 = 4 * 57 * 195_112;
+
+const _: () = assert!(
+    GROUP_MAX < GROUP_BAD,
+    "a valid group must not reach the test bit"
+);
+const _: () = assert!(
+    BAD_DIGIT >= GROUP_BAD,
+    "the sentinel must reach the test bit"
+);
+const _: () = assert!(
+    4 * BAD_DIGIT as u64 + GROUP_MAX as u64 <= u32::MAX as u64,
+    "a group sum must not wrap"
+);
 
 // ----------------------------------------------------------------------
 // Arithmetic Helpers
@@ -72,24 +108,38 @@ fn bignum_mul_add(digits: &mut [u64], count: &mut usize, multiplier: u64, addend
     true
 }
 
-/// Parses a chunk of Base58 characters into a u64 value.
+/// Parses a tail of 1-9 Base58 characters into a u64 value.
 /// Also calculates the effective multiplier (58^len) for that chunk.
 #[inline]
 fn parse_chunk(config: &Config, src: &[u8]) -> Result<(u64, u64), Error> {
+    let lut = &config.lut_58_pow;
+    let mut bad = 0u32;
     let mut value = 0u64;
     let mut multiplier = 1u64;
-    let mut bad = 0u8;
 
-    for &byte in src {
-        // `byte as usize` is provably below 256, so this indexes without a check.
-        let digit = config.decode_map[byte as usize];
-        bad |= digit;
-
-        value = value * 58 + u64::from(digit);
-        multiplier *= 58;
+    // Groups of four fold to three adds, since the weight is already in the table.
+    let mut rest = src;
+    while rest.len() >= 4 {
+        let group = lut[3][rest[0] as usize]
+            + lut[2][rest[1] as usize]
+            + lut[1][rest[2] as usize]
+            + lut[0][rest[3] as usize];
+        bad |= group;
+        value = value * P4 + u64::from(group);
+        multiplier *= P4;
+        rest = &rest[4..];
     }
 
-    if bad & 0x80 != 0 {
+    let left = rest.len();
+    let mut acc = 0u32;
+    for (i, &byte) in rest.iter().enumerate() {
+        acc += lut[left - 1 - i][byte as usize];
+    }
+    bad |= acc;
+    value = value * POW58[left] + u64::from(acc);
+    multiplier *= POW58[left];
+
+    if bad >= GROUP_BAD {
         return Err(Error::InvalidCharacter);
     }
 
@@ -98,37 +148,29 @@ fn parse_chunk(config: &Config, src: &[u8]) -> Result<(u64, u64), Error> {
 
 /// Parses exactly 10 Base58 characters into a single Base 58^10 digit.
 ///
-/// The reduction tree is balanced rather than a Horner chain, so the ten lookups
-/// and the multiplies they feed stay independent.
+/// The characters are read as two groups of four plus a pair. Because
+/// [`Config::lut_58_pow`] already carries the 58^k factor, a group costs three
+/// adds and no multiply, and the ten table entries validate as a group: see
+/// [`BAD_DIGIT`].
 #[inline]
 fn parse_chunk_10(config: &Config, src: &[u8; 10]) -> Result<u64, Error> {
-    let map = &config.decode_map;
-    let d0 = map[src[0] as usize];
-    let d1 = map[src[1] as usize];
-    let d2 = map[src[2] as usize];
-    let d3 = map[src[3] as usize];
-    let d4 = map[src[4] as usize];
-    let d5 = map[src[5] as usize];
-    let d6 = map[src[6] as usize];
-    let d7 = map[src[7] as usize];
-    let d8 = map[src[8] as usize];
-    let d9 = map[src[9] as usize];
+    let lut = &config.lut_58_pow;
 
-    if (d0 | d1 | d2 | d3 | d4 | d5 | d6 | d7 | d8 | d9) & 0x80 != 0 {
+    let g0 = lut[3][src[0] as usize]
+        + lut[2][src[1] as usize]
+        + lut[1][src[2] as usize]
+        + lut[0][src[3] as usize];
+    let g1 = lut[3][src[4] as usize]
+        + lut[2][src[5] as usize]
+        + lut[1][src[6] as usize]
+        + lut[0][src[7] as usize];
+    let g2 = lut[1][src[8] as usize] + lut[0][src[9] as usize];
+
+    if (g0 | g1 | g2) >= GROUP_BAD {
         return Err(Error::InvalidCharacter);
     }
 
-    let v01 = u64::from(d0) * 58 + u64::from(d1);
-    let v23 = u64::from(d2) * 58 + u64::from(d3);
-    let v45 = u64::from(d4) * 58 + u64::from(d5);
-    let v67 = u64::from(d6) * 58 + u64::from(d7);
-    let v89 = u64::from(d8) * 58 + u64::from(d9);
-
-    let v03 = v01 * 3364 + v23;
-    let v47 = v45 * 3364 + v67;
-
-    let v07 = v03 * 11_316_496 + v47;
-    Ok(v07 * 3364 + v89)
+    Ok((u64::from(g0) * P4 + u64::from(g1)) * 3364 + u64::from(g2))
 }
 
 // ----------------------------------------------------------------------
@@ -272,8 +314,6 @@ const MAT_MAXE: usize = 6;
 /// Base-2^32 limbs in the widest value, 58^24 - 1.
 const MAT_MAXL: usize = 5;
 
-const P4: u64 = 11_316_496; // 58^4
-
 /// 58^(4e) in base 2^32, little-endian, for e = 0..`MAT_MAXE`.
 ///
 /// Keyed by exponent rather than by `(R, row)` so every length shares one table
@@ -308,45 +348,41 @@ static MAT_W: [[u32; MAT_MAXL]; MAT_MAXE] = mat_weights();
 
 /// Parses `C` characters into `R` base-58^4 digits, left-padded.
 ///
-/// Only the first group can be partial. Every raw map byte is OR-ed into `bad`
-/// and the sign bit tested once at the end, so the per-character path has no
-/// branch, and the two halves of a group are combined independently so four
-/// lookups do not form a chain.
+/// Only the first group can be partial. A group of four is a plain sum of four
+/// [`Config::lut_58_pow`] entries, so the per-character path has neither a
+/// multiply nor a branch; the sums are OR-ed and tested once at the end.
 #[inline]
 fn mat_parse<const C: usize, const R: usize>(
     config: &Config,
     src: &[u8],
 ) -> Result<[u32; R], Error> {
     debug_assert_eq!(src.len(), C);
-    let map = &config.decode_map;
+    let lut = &config.lut_58_pow;
     let mut digits = [0u32; R];
-    let mut bad = 0u8;
 
     let head = C - 4 * (R - 1);
     let mut acc = 0u32;
     let mut idx = 0;
     while idx < head {
-        let val = map[src[idx] as usize];
-        bad |= val;
-        acc = acc * 58 + u32::from(val);
+        acc += lut[head - 1 - idx][src[idx] as usize];
         idx += 1;
     }
     digits[0] = acc;
+    let mut bad = acc;
 
     let mut row = 1;
     while row < R {
         let at = head + 4 * (row - 1);
-        let c0 = map[src[at] as usize];
-        let c1 = map[src[at + 1] as usize];
-        let c2 = map[src[at + 2] as usize];
-        let c3 = map[src[at + 3] as usize];
-        bad |= c0 | c1 | c2 | c3;
-        digits[row] =
-            (u32::from(c0) * 58 + u32::from(c1)) * 3364 + u32::from(c2) * 58 + u32::from(c3);
+        let group = lut[3][src[at] as usize]
+            + lut[2][src[at + 1] as usize]
+            + lut[1][src[at + 2] as usize]
+            + lut[0][src[at + 3] as usize];
+        bad |= group;
+        digits[row] = group;
         row += 1;
     }
 
-    if bad & 0x80 != 0 {
+    if bad >= GROUP_BAD {
         return Err(Error::InvalidCharacter);
     }
     Ok(digits)

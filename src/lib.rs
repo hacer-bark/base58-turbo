@@ -137,6 +137,9 @@ pub struct Config {
     pub decode_map: [u8; 256],
     /// Pre-computed LUT of squared values for encoding.
     pub lut_58_squared: [u16; 3364],
+    /// Pre-computed decode weights: `lut_58_pow[k][b]` is `digit(b) * 58^k`, or
+    /// [`BAD_DIGIT`] when `b` is outside the alphabet. See [`crate::decode`].
+    pub lut_58_pow: [[u32; 256]; 4],
 }
 
 impl Config {
@@ -178,8 +181,43 @@ impl Config {
             alphabet: *alphabet,
             decode_map: map,
             lut_58_squared: gen_lut_squared(alphabet),
+            lut_58_pow: gen_lut_pow(&map),
         })
     }
+}
+
+/// Sentinel stored in [`Config::lut_58_pow`] for a byte outside the alphabet.
+///
+/// A valid entry is at most `57 * 58^3 = 11_121_384`, so the sum of any four is
+/// below `2^26`, while a sum containing at least one sentinel is at least `2^28`
+/// and at most `2^30`. One test of the bits above 26 therefore validates a whole
+/// group of four characters, with no per-character branch and nothing to mask.
+pub const BAD_DIGIT: u32 = 1 << 28;
+
+/// Builds the decode weight table: `[k][b] = digit(b) * 58^k` for `k` in 0..4.
+const fn gen_lut_pow(map: &[u8; 256]) -> [[u32; 256]; 4] {
+    let mut table = [[BAD_DIGIT; 256]; 4];
+    let mut k = 0;
+    while k < 4 {
+        let mut pow: u32 = 1;
+        let mut e = 0;
+        while e < k {
+            pow *= 58;
+            e += 1;
+        }
+        let mut b = 0;
+        while b < 256 {
+            let digit = map[b];
+            table[k][b] = if digit & 0x80 != 0 {
+                BAD_DIGIT
+            } else {
+                digit as u32 * pow
+            };
+            b += 1;
+        }
+        k += 1;
+    }
+    table
 }
 
 /// A Base58 Encoder/Decoder Engine.

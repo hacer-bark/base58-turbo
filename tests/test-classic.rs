@@ -924,3 +924,70 @@ fn decode_matrix_round_trips_random_payloads() {
         }
     }
 }
+
+// ======================================================================
+// 8. Group-parse coverage
+// ======================================================================
+//
+// The decoder reads characters in groups of four weighted by `lut_58_pow`, and
+// validates a whole group with one test of the bits above 26. The arms that can
+// go wrong are the partial ones -- the 1..4-character head of the matrix path,
+// the 10-character chunk's trailing pair, and the 1..9-character tail, whose
+// last 0..3 characters take a shorter weight. These sweep every character count
+// that reaches each of them.
+
+#[test]
+fn group_parse_round_trips_every_payload_length() {
+    for engine in [BITCOIN, RIPPLE, FLICKR] {
+        let alphabet = engine.config().alphabet;
+        // Character counts 1..=120 cover every matrix head (1..4), every tail
+        // length (0..9) and both sides of the matrix/Horner threshold.
+        for len in 1..=120usize {
+            let text: Vec<u8> = (0..len)
+                .map(|i| alphabet[(i * 37 + len * 11 + 1) % 58])
+                .collect();
+            let decoded = engine.decode(&text).unwrap();
+            let re = engine.encode(&decoded).unwrap();
+            assert_eq!(re.as_bytes(), &text[..], "len {len}");
+        }
+    }
+}
+
+#[test]
+fn group_parse_rejects_invalid_at_every_position() {
+    for engine in [BITCOIN, RIPPLE, FLICKR] {
+        let alphabet = engine.config().alphabet;
+        let mut outside: Vec<u8> = (0u8..=255).filter(|b| !alphabet.contains(b)).collect();
+        outside.truncate(8);
+
+        for len in 1..=48usize {
+            for pos in 0..len {
+                for &bad in &outside {
+                    let mut text: Vec<u8> = (0..len).map(|i| alphabet[(i * 37 + 1) % 58]).collect();
+                    text[pos] = bad;
+                    assert_eq!(
+                        engine.decode(&text).unwrap_err(),
+                        Error::InvalidCharacter,
+                        "len {len} pos {pos} byte {bad:#x}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn group_parse_handles_extreme_digits() {
+    // All-lowest and all-highest characters at every length: the lowest keeps
+    // every group sum at zero, the highest puts each one at its maximum.
+    for engine in [BITCOIN, RIPPLE, FLICKR] {
+        let alphabet = engine.config().alphabet;
+        for len in 1..=120usize {
+            for ch in [alphabet[0], alphabet[57]] {
+                let text = vec![ch; len];
+                let decoded = engine.decode(&text).unwrap();
+                assert_eq!(engine.encode(&decoded).unwrap().as_bytes(), &text[..]);
+            }
+        }
+    }
+}
