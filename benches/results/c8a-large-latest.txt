@@ -1,215 +1,215 @@
 Benchmarking Base58_Performances/Encode/Turbo/16
-  time:   [18.318 ns 18.321 ns 18.324 ns]
-  thrpt:  [832.72 MiB/s 832.87 MiB/s 833.01 MiB/s]
+  time:   [18.780 ns 18.785 ns 18.791 ns]
+  thrpt:  [812.05 MiB/s 812.30 MiB/s 812.51 MiB/s]
 
 Benchmarking Base58_Performances/Encode/bs58/16
-  time:   [181.54 ns 181.55 ns 181.56 ns]
-  thrpt:  [84.042 MiB/s 84.048 MiB/s 84.053 MiB/s]
+  time:   [172.92 ns 172.95 ns 172.98 ns]
+  thrpt:  [88.211 MiB/s 88.228 MiB/s 88.241 MiB/s]
 
 Benchmarking Base58_Performances/Encode/base58/16
-  time:   [226.59 ns 226.68 ns 226.78 ns]
-  thrpt:  [67.284 MiB/s 67.314 MiB/s 67.340 MiB/s]
+  time:   [231.68 ns 231.95 ns 232.19 ns]
+  thrpt:  [65.716 MiB/s 65.784 MiB/s 65.862 MiB/s]
 
 Benchmarking Base58_Performances/Encode/Turbo_XMR/16
-  time:   [23.157 ns 23.191 ns 23.219 ns]
-  thrpt:  [657.18 MiB/s 657.95 MiB/s 658.92 MiB/s]
+  time:   [23.327 ns 23.350 ns 23.382 ns]
+  thrpt:  [652.60 MiB/s 653.47 MiB/s 654.12 MiB/s]
 
 Benchmarking Base58_Performances/Encode/base58_monero/16
-  time:   [131.54 ns 131.62 ns 131.72 ns]
-  thrpt:  [115.84 MiB/s 115.93 MiB/s 116.00 MiB/s]
+  time:   [127.37 ns 127.98 ns 128.94 ns]
+  thrpt:  [118.34 MiB/s 119.23 MiB/s 119.80 MiB/s]
 
 Benchmarking Base58_Performances/Decode/Turbo/16
-  time:   [13.649 ns 13.675 ns 13.696 ns]
-  thrpt:  [1.4960 GiB/s 1.4983 GiB/s 1.5012 GiB/s]
+  time:   [13.023 ns 13.070 ns 13.107 ns]
+  thrpt:  [1.5632 GiB/s 1.5677 GiB/s 1.5733 GiB/s]
 
 Benchmarking Base58_Performances/Decode/bs58/16
-  time:   [92.851 ns 92.859 ns 92.867 ns]
-  thrpt:  [225.92 MiB/s 225.94 MiB/s 225.96 MiB/s]
+  time:   [91.405 ns 91.556 ns 91.757 ns]
+  thrpt:  [228.66 MiB/s 229.16 MiB/s 229.54 MiB/s]
 
 Benchmarking Base58_Performances/Decode/base58/16
-  time:   [292.31 ns 292.42 ns 292.49 ns]
-  thrpt:  [71.732 MiB/s 71.750 MiB/s 71.775 MiB/s]
+  time:   [296.16 ns 296.23 ns 296.29 ns]
+  thrpt:  [70.811 MiB/s 70.826 MiB/s 70.843 MiB/s]
 
 Benchmarking Base58_Performances/Decode/Turbo_XMR/16
-  time:   [29.103 ns 29.129 ns 29.164 ns]
-  thrpt:  [719.41 MiB/s 720.27 MiB/s 720.91 MiB/s]
+  time:   [26.837 ns 26.912 ns 27.015 ns]
+  thrpt:  [776.64 MiB/s 779.61 MiB/s 781.80 MiB/s]
 
 Benchmarking Base58_Performances/Decode/base58_monero/16
-  time:   [53.779 ns 53.895 ns 53.981 ns]
-  thrpt:  [388.67 MiB/s 389.29 MiB/s 390.13 MiB/s]
+  time:   [53.664 ns 53.880 ns 54.049 ns]
+  thrpt:  [388.19 MiB/s 389.40 MiB/s 390.97 MiB/s]
 
 Benchmarking Base58_Performances/Encode/Turbo/32
-  time:   [23.721 ns 23.724 ns 23.728 ns]
-  thrpt:  [1.2560 GiB/s 1.2562 GiB/s 1.2564 GiB/s]
+  time:   [24.247 ns 24.253 ns 24.260 ns]
+  thrpt:  [1.2284 GiB/s 1.2288 GiB/s 1.2291 GiB/s]
 
 Benchmarking Base58_Performances/Encode/bs58/32
-  time:   [702.11 ns 702.16 ns 702.21 ns]
-  thrpt:  [43.460 MiB/s 43.463 MiB/s 43.466 MiB/s]
+  time:   [697.09 ns 697.21 ns 697.32 ns]
+  thrpt:  [43.764 MiB/s 43.771 MiB/s 43.779 MiB/s]
 
 Benchmarking Base58_Performances/Encode/base58/32
-  time:   [769.82 ns 770.05 ns 770.35 ns]
-  thrpt:  [39.615 MiB/s 39.631 MiB/s 39.642 MiB/s]
+  time:   [767.79 ns 767.96 ns 768.10 ns]
+  thrpt:  [39.731 MiB/s 39.739 MiB/s 39.747 MiB/s]
 
 Benchmarking Base58_Performances/Encode/five8/32
-  time:   [34.251 ns 34.253 ns 34.255 ns]
-  thrpt:  [890.90 MiB/s 890.96 MiB/s 891.01 MiB/s]
+  time:   [34.731 ns 34.738 ns 34.748 ns]
+  thrpt:  [878.26 MiB/s 878.50 MiB/s 878.69 MiB/s]
 
 Benchmarking Base58_Performances/Encode/Turbo_XMR/32
-  time:   [53.451 ns 53.556 ns 53.694 ns]
-  thrpt:  [568.36 MiB/s 569.82 MiB/s 570.94 MiB/s]
+  time:   [44.864 ns 44.901 ns 44.950 ns]
+  thrpt:  [678.92 MiB/s 679.66 MiB/s 680.23 MiB/s]
 
 Benchmarking Base58_Performances/Encode/base58_monero/32
-  time:   [195.25 ns 195.60 ns 196.21 ns]
-  thrpt:  [155.54 MiB/s 156.02 MiB/s 156.30 MiB/s]
+  time:   [205.78 ns 207.13 ns 209.17 ns]
+  thrpt:  [145.90 MiB/s 147.33 MiB/s 148.30 MiB/s]
 
 Benchmarking Base58_Performances/Decode/Turbo/32
-  time:   [18.690 ns 18.704 ns 18.727 ns]
-  thrpt:  [2.1882 GiB/s 2.1909 GiB/s 2.1925 GiB/s]
+  time:   [25.709 ns 25.775 ns 25.900 ns]
+  thrpt:  [1.5822 GiB/s 1.5899 GiB/s 1.5939 GiB/s]
 
 Benchmarking Base58_Performances/Decode/bs58/32
-  time:   [293.63 ns 293.65 ns 293.67 ns]
-  thrpt:  [142.89 MiB/s 142.90 MiB/s 142.91 MiB/s]
+  time:   [300.19 ns 300.71 ns 301.07 ns]
+  thrpt:  [139.37 MiB/s 139.54 MiB/s 139.78 MiB/s]
 
 Benchmarking Base58_Performances/Decode/base58/32
-  time:   [544.14 ns 544.17 ns 544.20 ns]
-  thrpt:  [77.107 MiB/s 77.112 MiB/s 77.116 MiB/s]
+  time:   [549.73 ns 549.80 ns 549.86 ns]
+  thrpt:  [76.313 MiB/s 76.321 MiB/s 76.331 MiB/s]
 
 Benchmarking Base58_Performances/Decode/five8/32
-  time:   [36.789 ns 36.795 ns 36.801 ns]
-  thrpt:  [1.1135 GiB/s 1.1137 GiB/s 1.1139 GiB/s]
+  time:   [37.343 ns 37.361 ns 37.376 ns]
+  thrpt:  [1.0964 GiB/s 1.0968 GiB/s 1.0973 GiB/s]
 
 Benchmarking Base58_Performances/Decode/Turbo_XMR/32
-  time:   [56.386 ns 56.389 ns 56.394 ns]
-  thrpt:  [744.08 MiB/s 744.14 MiB/s 744.19 MiB/s]
+  time:   [52.268 ns 52.365 ns 52.496 ns]
+  thrpt:  [799.33 MiB/s 801.32 MiB/s 802.81 MiB/s]
 
 Benchmarking Base58_Performances/Decode/base58_monero/32
-  time:   [124.83 ns 124.96 ns 125.13 ns]
-  thrpt:  [335.35 MiB/s 335.81 MiB/s 336.15 MiB/s]
+  time:   [124.67 ns 124.87 ns 125.03 ns]
+  thrpt:  [335.61 MiB/s 336.04 MiB/s 336.59 MiB/s]
 
 Benchmarking Base58_Performances/Encode/Turbo/48
-  time:   [69.265 ns 69.277 ns 69.291 ns]
-  thrpt:  [660.64 MiB/s 660.77 MiB/s 660.89 MiB/s]
+  time:   [82.675 ns 83.168 ns 83.537 ns]
+  thrpt:  [547.97 MiB/s 550.41 MiB/s 553.69 MiB/s]
 
 Benchmarking Base58_Performances/Encode/bs58/48
-  time:   [1.5966 µs 1.5967 µs 1.5967 µs]
-  thrpt:  [28.669 MiB/s 28.670 MiB/s 28.672 MiB/s]
+  time:   [1.6584 µs 1.6585 µs 1.6586 µs]
+  thrpt:  [27.599 MiB/s 27.601 MiB/s 27.603 MiB/s]
 
 Benchmarking Base58_Performances/Encode/base58/48
-  time:   [1.6733 µs 1.6737 µs 1.6742 µs]
-  thrpt:  [27.342 MiB/s 27.350 MiB/s 27.358 MiB/s]
+  time:   [1.7285 µs 1.7297 µs 1.7313 µs]
+  thrpt:  [26.440 MiB/s 26.465 MiB/s 26.484 MiB/s]
 
 Benchmarking Base58_Performances/Encode/Turbo_XMR/48
-  time:   [66.081 ns 66.166 ns 66.232 ns]
-  thrpt:  [691.15 MiB/s 691.84 MiB/s 692.73 MiB/s]
+  time:   [66.375 ns 66.431 ns 66.504 ns]
+  thrpt:  [688.32 MiB/s 689.08 MiB/s 689.66 MiB/s]
 
 Benchmarking Base58_Performances/Encode/base58_monero/48
-  time:   [322.86 ns 323.90 ns 325.54 ns]
-  thrpt:  [140.61 MiB/s 141.33 MiB/s 141.79 MiB/s]
+  time:   [339.16 ns 341.21 ns 344.61 ns]
+  thrpt:  [132.84 MiB/s 134.16 MiB/s 134.97 MiB/s]
 
 Benchmarking Base58_Performances/Decode/Turbo/48
-  time:   [25.615 ns 25.637 ns 25.656 ns]
-  thrpt:  [2.3596 GiB/s 2.3613 GiB/s 2.3633 GiB/s]
+  time:   [39.081 ns 39.115 ns 39.142 ns]
+  thrpt:  [1.5703 GiB/s 1.5714 GiB/s 1.5728 GiB/s]
 
 Benchmarking Base58_Performances/Decode/bs58/48
-  time:   [632.91 ns 632.95 ns 633.00 ns]
-  thrpt:  [97.929 MiB/s 97.936 MiB/s 97.942 MiB/s]
+  time:   [658.75 ns 658.83 ns 658.92 ns]
+  thrpt:  [95.524 MiB/s 95.537 MiB/s 95.549 MiB/s]
 
 Benchmarking Base58_Performances/Decode/base58/48
-  time:   [782.85 ns 783.04 ns 783.29 ns]
-  thrpt:  [79.139 MiB/s 79.164 MiB/s 79.184 MiB/s]
+  time:   [804.85 ns 804.96 ns 805.07 ns]
+  thrpt:  [78.183 MiB/s 78.193 MiB/s 78.204 MiB/s]
 
 Benchmarking Base58_Performances/Decode/Turbo_XMR/48
-  time:   [83.961 ns 84.004 ns 84.051 ns]
-  thrpt:  [737.52 MiB/s 737.93 MiB/s 738.31 MiB/s]
+  time:   [77.367 ns 77.476 ns 77.626 ns]
+  thrpt:  [810.84 MiB/s 812.41 MiB/s 813.56 MiB/s]
 
 Benchmarking Base58_Performances/Decode/base58_monero/48
-  time:   [203.36 ns 203.62 ns 204.09 ns]
-  thrpt:  [303.73 MiB/s 304.43 MiB/s 304.83 MiB/s]
+  time:   [197.16 ns 197.72 ns 198.18 ns]
+  thrpt:  [317.61 MiB/s 318.34 MiB/s 319.25 MiB/s]
 
 Benchmarking Base58_Performances/Encode/Turbo/64
-  time:   [45.003 ns 45.006 ns 45.008 ns]
-  thrpt:  [1.3243 GiB/s 1.3244 GiB/s 1.3245 GiB/s]
+  time:   [104.76 ns 104.82 ns 104.88 ns]
+  thrpt:  [581.92 MiB/s 582.27 MiB/s 582.63 MiB/s]
 
 Benchmarking Base58_Performances/Encode/bs58/64
-  time:   [2.9601 µs 2.9604 µs 2.9608 µs]
-  thrpt:  [20.615 MiB/s 20.617 MiB/s 20.620 MiB/s]
+  time:   [3.0205 µs 3.0208 µs 3.0210 µs]
+  thrpt:  [20.204 MiB/s 20.205 MiB/s 20.207 MiB/s]
 
 Benchmarking Base58_Performances/Encode/base58/64
-  time:   [3.0690 µs 3.0699 µs 3.0710 µs]
-  thrpt:  [19.875 MiB/s 19.882 MiB/s 19.888 MiB/s]
+  time:   [3.1008 µs 3.1017 µs 3.1025 µs]
+  thrpt:  [19.673 MiB/s 19.678 MiB/s 19.684 MiB/s]
 
 Benchmarking Base58_Performances/Encode/five8/64
-  time:   [59.673 ns 59.685 ns 59.696 ns]
-  thrpt:  [1022.4 MiB/s 1022.6 MiB/s 1022.8 MiB/s]
+  time:   [53.699 ns 53.749 ns 53.804 ns]
+  thrpt:  [1.1078 GiB/s 1.1089 GiB/s 1.1100 GiB/s]
 
 Benchmarking Base58_Performances/Encode/Turbo_XMR/64
-  time:   [102.03 ns 102.13 ns 102.21 ns]
-  thrpt:  [597.13 MiB/s 597.61 MiB/s 598.23 MiB/s]
+  time:   [93.156 ns 93.207 ns 93.273 ns]
+  thrpt:  [654.37 MiB/s 654.84 MiB/s 655.20 MiB/s]
 
 Benchmarking Base58_Performances/Encode/base58_monero/64
-  time:   [380.21 ns 381.32 ns 383.14 ns]
-  thrpt:  [159.30 MiB/s 160.06 MiB/s 160.53 MiB/s]
+  time:   [402.87 ns 405.95 ns 410.32 ns]
+  thrpt:  [148.75 MiB/s 150.35 MiB/s 151.50 MiB/s]
 
 Benchmarking Base58_Performances/Decode/Turbo/64
-  time:   [34.589 ns 34.703 ns 34.778 ns]
-  thrpt:  [2.3298 GiB/s 2.3348 GiB/s 2.3425 GiB/s]
+  time:   [52.035 ns 52.050 ns 52.064 ns]
+  thrpt:  [1.5741 GiB/s 1.5746 GiB/s 1.5750 GiB/s]
 
 Benchmarking Base58_Performances/Decode/bs58/64
-  time:   [1.1434 µs 1.1435 µs 1.1436 µs]
-  thrpt:  [72.552 MiB/s 72.560 MiB/s 72.566 MiB/s]
+  time:   [1.1684 µs 1.1685 µs 1.1686 µs]
+  thrpt:  [71.813 MiB/s 71.820 MiB/s 71.827 MiB/s]
 
 Benchmarking Base58_Performances/Decode/base58/64
-  time:   [1.0372 µs 1.0372 µs 1.0373 µs]
-  thrpt:  [79.986 MiB/s 79.991 MiB/s 79.996 MiB/s]
+  time:   [1.0616 µs 1.0617 µs 1.0619 µs]
+  thrpt:  [79.034 MiB/s 79.043 MiB/s 79.051 MiB/s]
 
 Benchmarking Base58_Performances/Decode/five8/64
-  time:   [69.373 ns 69.418 ns 69.452 ns]
-  thrpt:  [1.1666 GiB/s 1.1672 GiB/s 1.1680 GiB/s]
+  time:   [70.653 ns 70.721 ns 70.772 ns]
+  thrpt:  [1.1580 GiB/s 1.1589 GiB/s 1.1600 GiB/s]
 
 Benchmarking Base58_Performances/Decode/Turbo_XMR/64
-  time:   [111.07 ns 111.11 ns 111.17 ns]
-  thrpt:  [746.36 MiB/s 746.72 MiB/s 747.00 MiB/s]
+  time:   [102.88 ns 103.01 ns 103.19 ns]
+  thrpt:  [813.32 MiB/s 814.69 MiB/s 815.71 MiB/s]
 
 Benchmarking Base58_Performances/Decode/base58_monero/64
-  time:   [231.94 ns 232.12 ns 232.42 ns]
-  thrpt:  [356.98 MiB/s 357.44 MiB/s 357.73 MiB/s]
+  time:   [241.15 ns 241.36 ns 241.52 ns]
+  thrpt:  [347.48 MiB/s 347.71 MiB/s 348.02 MiB/s]
 
 Benchmarking Base58_Performances/Encode/Turbo/128
-  time:   [298.10 ns 298.13 ns 298.16 ns]
-  thrpt:  [409.41 MiB/s 409.45 MiB/s 409.49 MiB/s]
+  time:   [356.20 ns 358.22 ns 360.61 ns]
+  thrpt:  [338.51 MiB/s 340.77 MiB/s 342.70 MiB/s]
 
 Benchmarking Base58_Performances/Encode/bs58/128
-  time:   [12.523 µs 12.526 µs 12.530 µs]
-  thrpt:  [9.7426 MiB/s 9.7451 MiB/s 9.7479 MiB/s]
+  time:   [12.755 µs 12.756 µs 12.757 µs]
+  thrpt:  [9.5686 MiB/s 9.5696 MiB/s 9.5707 MiB/s]
 
 Benchmarking Base58_Performances/Encode/base58/128
-  time:   [12.597 µs 12.599 µs 12.601 µs]
-  thrpt:  [9.6875 MiB/s 9.6889 MiB/s 9.6903 MiB/s]
+  time:   [12.714 µs 12.717 µs 12.720 µs]
+  thrpt:  [9.5965 MiB/s 9.5988 MiB/s 9.6011 MiB/s]
 
 Benchmarking Base58_Performances/Encode/Turbo_XMR/128
-  time:   [179.16 ns 179.28 ns 179.37 ns]
-  thrpt:  [680.54 MiB/s 680.90 MiB/s 681.35 MiB/s]
+  time:   [179.98 ns 180.08 ns 180.22 ns]
+  thrpt:  [677.33 MiB/s 677.85 MiB/s 678.25 MiB/s]
 
 Benchmarking Base58_Performances/Encode/base58_monero/128
-  time:   [691.23 ns 692.56 ns 694.67 ns]
-  thrpt:  [175.72 MiB/s 176.26 MiB/s 176.60 MiB/s]
+  time:   [722.12 ns 730.73 ns 741.88 ns]
+  thrpt:  [164.54 MiB/s 167.05 MiB/s 169.05 MiB/s]
 
 Benchmarking Base58_Performances/Decode/Turbo/128
-  time:   [118.04 ns 118.16 ns 118.26 ns]
-  thrpt:  [1.3782 GiB/s 1.3793 GiB/s 1.3807 GiB/s]
+  time:   [121.00 ns 121.08 ns 121.18 ns]
+  thrpt:  [1.3449 GiB/s 1.3461 GiB/s 1.3470 GiB/s]
 
 Benchmarking Base58_Performances/Decode/bs58/128
-  time:   [4.8419 µs 4.8423 µs 4.8427 µs]
-  thrpt:  [34.463 MiB/s 34.466 MiB/s 34.468 MiB/s]
+  time:   [4.9240 µs 4.9243 µs 4.9248 µs]
+  thrpt:  [33.889 MiB/s 33.891 MiB/s 33.894 MiB/s]
 
 Benchmarking Base58_Performances/Decode/base58/128
-  time:   [2.0472 µs 2.0474 µs 2.0475 µs]
-  thrpt:  [81.509 MiB/s 81.515 MiB/s 81.522 MiB/s]
+  time:   [2.0737 µs 2.0742 µs 2.0747 µs]
+  thrpt:  [80.441 MiB/s 80.463 MiB/s 80.479 MiB/s]
 
 Benchmarking Base58_Performances/Decode/Turbo_XMR/128
-  time:   [225.42 ns 225.62 ns 225.82 ns]
-  thrpt:  [739.04 MiB/s 739.71 MiB/s 740.36 MiB/s]
+  time:   [211.47 ns 211.73 ns 212.03 ns]
+  thrpt:  [787.11 MiB/s 788.24 MiB/s 789.22 MiB/s]
 
 Benchmarking Base58_Performances/Decode/base58_monero/128
-  time:   [399.03 ns 399.51 ns 400.38 ns]
-  thrpt:  [416.84 MiB/s 417.74 MiB/s 418.25 MiB/s]
+  time:   [410.41 ns 411.11 ns 411.65 ns]
+  thrpt:  [405.42 MiB/s 405.96 MiB/s 406.65 MiB/s]
