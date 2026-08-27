@@ -122,7 +122,7 @@ fn bench_comparison(c: &mut Criterion) {
         // 3. base58 -- allocating only, no zero-copy API exists
         if should_run("base58") {
             group.bench_with_input(
-                BenchmarkId::new("Encode/base58 (alloc)", size),
+                BenchmarkId::new("Encode/base58", size),
                 &input_data,
                 |b, d| b.iter(|| black_box(black_box(d).to_base58())),
             );
@@ -166,7 +166,7 @@ fn bench_comparison(c: &mut Criterion) {
                 },
             );
             group.bench_with_input(
-                BenchmarkId::new("Encode/base58_monero (alloc)", size),
+                BenchmarkId::new("Encode/base58_monero", size),
                 &input_data,
                 |b, d| b.iter(|| black_box(base58_xmr::encode(black_box(d)).unwrap())),
             );
@@ -217,7 +217,7 @@ fn bench_comparison(c: &mut Criterion) {
         // 3. base58 -- allocating only
         if should_run("base58") {
             group.bench_with_input(
-                BenchmarkId::new("Decode/base58 (alloc)", size),
+                BenchmarkId::new("Decode/base58", size),
                 &encoded_str,
                 |b, d| b.iter(|| black_box(black_box(d).from_base58().unwrap())),
             );
@@ -268,7 +268,7 @@ fn bench_comparison(c: &mut Criterion) {
                 },
             );
             group.bench_with_input(
-                BenchmarkId::new("Decode/base58_monero (alloc)", size),
+                BenchmarkId::new("Decode/base58_monero", size),
                 &encoded_xmr,
                 |b, d| b.iter(|| black_box(base58_xmr::decode(black_box(d)).unwrap())),
             );
