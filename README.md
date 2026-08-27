@@ -16,7 +16,7 @@
 
 <img alt="Base58 throughput by payload size on AWS c8a.large (AMD EPYC 9R45) — base58-turbo leads bs58, base58, base58-monero, and five8 at every size, decoding past 2 GiB/s" src="benches/results/throughput.png">
 
-<p align="center"><sub>AWS <code>c8a.large</code> (AMD EPYC 9R45). See <a href="#benchmarks">Benchmarks</a> for a second box and reproduction steps.</sub></p>
+<p align="center"><sub>AWS <code>c8a.large</code> (AMD EPYC 9R45). See <a href="#benchmarks">Benchmarks</a>.</sub></p>
 
 ## Quick Start
 
@@ -129,7 +129,6 @@ The test suite guards against ordinary logic bugs: exact conformance vectors, ev
 
 | Feature | Default | Description |
 | :--- | :---: | :--- |
-| `serde` | No | `serde` serialization/deserialization for `Config` and `Engine` |
 | `std` | Yes | `String`/`Vec` support; disable for `no_std` |
 
 ## License

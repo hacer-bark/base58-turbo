@@ -201,3 +201,66 @@ pub fn decode<T: AsRef<[u8]>>(input: T) -> Result<Vec<u8>, Error> {
     out.truncate(actual_len);
     Ok(out)
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(
+        clippy::all,
+        clippy::pedantic,
+        clippy::nursery,
+        clippy::cargo,
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic
+    )]
+
+    use super::*;
+
+    /// A character count with no entry in [`XMR_ENCODED_SIZES`] has no valid
+    /// decoded length.
+    #[test]
+    fn decoded_len_rejects_invalid_remainder() {
+        assert_eq!(decoded_len(1), None);
+        assert_eq!(decoded_len(4), None);
+        assert_eq!(decoded_len(8), None);
+    }
+
+    /// `encode`/`decode` special-case empty input themselves, so `encode_into`
+    /// and `decode_into`'s own empty-input returns are only reachable by
+    /// calling them directly.
+    #[test]
+    fn into_variants_handle_empty_input_directly() {
+        let mut buf = [0u8; 11];
+        assert_eq!(encode_into(b"", &mut buf), Ok(0));
+        assert_eq!(decode_into("", &mut buf), Ok(0));
+    }
+
+    #[test]
+    fn encode_into_rejects_buffer_too_small() {
+        let mut buf = [0u8; 1];
+        assert_eq!(encode_into(b"hello", &mut buf), Err(Error::BufferTooSmall));
+    }
+
+    #[test]
+    fn decode_into_rejects_buffer_too_small() {
+        // "zz" (2 chars) needs a 1-byte buffer; give it none.
+        let mut buf: [u8; 0] = [];
+        assert_eq!(decode_into("zz", &mut buf), Err(Error::BufferTooSmall));
+    }
+
+    /// A chunk whose character count matches no valid block size.
+    #[test]
+    fn decode_into_rejects_invalid_chunk_length() {
+        let mut buf = [0u8; 16];
+        assert_eq!(decode_into("zzzz", &mut buf), Err(Error::InvalidCharacter));
+    }
+
+    /// "zz" decodes (via the plain [`MONERO`] engine) to 2 bytes, but a 2-char
+    /// chunk maps to only 1 expected byte, so the excess byte is checked for
+    /// overflow -- and here it is nonzero.
+    #[test]
+    fn decode_into_rejects_excess_overflow() {
+        let mut buf = [0u8; 1];
+        assert_eq!(decode_into("zz", &mut buf), Err(Error::InvalidCharacter));
+    }
+}

@@ -684,6 +684,149 @@ mod tests {
         assert_eq!(digits[1], 1);
     }
 
+    /// A carry that has nowhere to go -- `digits` is already at capacity --
+    /// must report failure rather than write out of bounds.
+    #[test]
+    fn test_bignum_mul_add_rejects_overflow_when_out_of_capacity() {
+        let mut digits = [u64::MAX; 1];
+        let mut count = 1;
+        assert!(!bignum_mul_add(&mut digits, &mut count, 2, 1));
+        assert_eq!(count, 1, "count must not advance on failure");
+    }
+
+    /// `mat_weights` backs the `MAT_W` static, which is normally only evaluated
+    /// at compile time; call it directly so its body runs at runtime too.
+    #[test]
+    fn mat_weights_matches_static_table() {
+        assert_eq!(mat_weights(), MAT_W);
+    }
+
+    /// `accumulate`'s three `InputTooBig` returns are unreachable through the
+    /// public API, since every length class sizes its scratch generously above
+    /// `MAX_WORDS`. Drive each one directly with undersized scratch or a tight
+    /// `max_words` ceiling.
+    #[test]
+    fn accumulate_rejects_overflow_at_every_check() {
+        let config = BITCOIN.config();
+
+        // Chunk-of-10 call site: pre-load the sole word so the multiply-add
+        // overflows it, forcing a grow that a 1-word bignum has no room for.
+        let mut bignum = [u64::MAX; 1];
+        assert_eq!(
+            accumulate(config, b"zzzzzzzzzz", &mut bignum, 128),
+            Err(Error::InputTooBig)
+        );
+
+        // Tail call site: pre-load the sole word near capacity so the tail's
+        // multiply-add carries into a word that does not exist.
+        let mut bignum = [u64::MAX, 0, 0, 0, 0];
+        assert_eq!(
+            accumulate(config, b"z", &mut bignum[..1], 128),
+            Err(Error::InputTooBig)
+        );
+
+        // Mid-loop `max_words` check: scratch has room, but the ceiling does not.
+        let mut bignum = [u64::MAX, 0, 0, 0, 0];
+        assert_eq!(
+            accumulate(config, b"zzzzzzzzzz", &mut bignum, 1),
+            Err(Error::InputTooBig)
+        );
+
+        // Final `max_words` check, reached only through the tail (no full
+        // chunk-of-10 loop iteration) after a successful multiply-add.
+        let mut bignum = [u64::MAX, 0, 0, 0, 0, 0];
+        assert_eq!(
+            accumulate(config, b"2", &mut bignum, 1),
+            Err(Error::InputTooBig)
+        );
+    }
+
+    /// `emit`'s final-word `BufferTooSmall` branch needs a bignum whose top
+    /// word is nonzero but does not fit in the room left after whole words are
+    /// written; the public decode path never leaves that little slack.
+    #[test]
+    fn emit_rejects_buffer_too_small_on_partial_final_word() {
+        let bignum = [0x0102_0304_0506_0708u64, 1];
+        let mut dst = [0u8; 8];
+        assert_eq!(emit(&bignum, &mut dst), Err(Error::BufferTooSmall));
+    }
+
+    /// `mat_emit`'s general (neither `NBMIN` nor `NBMIN + 1`) length branch is
+    /// dead in the real dispatch table, where `NBMIN` is always calibrated to
+    /// the widest character count; call it directly with a mismatched `NBMIN`.
+    #[test]
+    fn mat_emit_general_length_branch() {
+        let limb = [0xFFFF_FFFFu32, 0, 0, 0, 0];
+        let mut dst = [0u8; 8];
+        let n = mat_emit::<2, 1>(&limb, &mut dst).unwrap();
+        assert_eq!(n, 4);
+        assert_eq!(dst[..4], [0xFF, 0xFF, 0xFF, 0xFF]);
+    }
+
+    /// `decode_slice`'s own oversized-input and oversized-decoded-length guards
+    /// are shadowed by `Engine::decode_into`'s pre-check for the first, and are
+    /// reachable through the public API for the second -- covered here for
+    /// both, directly and through the engine.
+    #[test]
+    fn decode_slice_rejects_oversized_input_directly() {
+        let mut dst = [0u8; 4096];
+        assert_eq!(
+            decode_slice(&[b'1'; 2049], &mut dst, BITCOIN.config()),
+            Err(Error::InputTooBig)
+        );
+    }
+
+    /// `decode_slice`'s leading-zero `BufferTooSmall` guard is reachable through
+    /// the public API too, but exercising it directly keeps this test isolated
+    /// from `Engine::decode_into`'s own, earlier buffer-size check.
+    #[test]
+    fn decode_slice_rejects_buffer_too_small_for_leading_zeros() {
+        let mut dst = [0u8; 2];
+        assert_eq!(
+            decode_slice(b"1111", &mut dst, BITCOIN.config()),
+            Err(Error::BufferTooSmall)
+        );
+    }
+
+    /// `decode_slice`'s own `total_len > 1024` guard, distinct from
+    /// `accumulate`'s `max_words` ceiling: the payload alone must stay under
+    /// that word budget, with leading zeros pushing the *total* output past
+    /// 1024 bytes on top of it.
+    #[test]
+    fn decode_slice_rejects_total_length_over_1024_bytes() {
+        let text = "1".repeat(50) + &"z".repeat(1380);
+        let mut dst = vec![0u8; text.len()];
+        assert_eq!(
+            decode_slice(text.as_bytes(), &mut dst, BITCOIN.config()),
+            Err(Error::InputTooBig)
+        );
+    }
+
+    #[test]
+    fn decode_into_rejects_payload_over_1024_bytes() {
+        // 1400 non-zero characters decode to well over 1024 bytes, while the
+        // input itself is under the 2048-character `_into` ceiling.
+        let text = "z".repeat(1400);
+        let mut out = vec![0u8; text.len()];
+        assert_eq!(
+            BITCOIN.decode_into(&text, &mut out),
+            Err(Error::InputTooBig)
+        );
+    }
+
+    /// `decode_slice_unbounded`'s `BufferTooSmall` guard never fires through
+    /// `Engine::decode`, which always sizes `dst` to at least the input length;
+    /// call the kernel directly with a deliberately undersized buffer.
+    #[test]
+    #[cfg(feature = "std")]
+    fn decode_slice_unbounded_rejects_buffer_too_small() {
+        let mut dst = [0u8; 1];
+        assert_eq!(
+            decode_slice_unbounded(b"111", &mut dst, BITCOIN.config()),
+            Err(Error::BufferTooSmall)
+        );
+    }
+
     #[test]
     fn test_parse_chunk_invalid() {
         let config = BITCOIN.config();

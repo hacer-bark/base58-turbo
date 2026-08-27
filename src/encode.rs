@@ -1138,6 +1138,75 @@ mod tests {
         assert_eq!(P_512, reference);
     }
 
+    /// `generate_weights` and `pow2_512_base_58_5` back const items (`TABLE_32`,
+    /// `TABLE_64`, `P_512`), so they normally run only at compile time. Calling
+    /// them here at runtime is what gives the bodies of these functions
+    /// coverage, not the const items themselves.
+    #[test]
+    fn table_generators_match_the_precomputed_consts() {
+        assert_eq!(generate_weights::<8, 8>(), TABLE_32);
+        assert_eq!(generate_weights::<16, 18>(), TABLE_64);
+        assert_eq!(pow2_512_base_58_5(), P_512);
+    }
+
+    /// `sub_table` backs `Tab::<W, D>::T`, another const item evaluated only at
+    /// compile time; call it directly so its body runs, too.
+    #[test]
+    fn sub_table_matches_direct_call() {
+        assert_eq!(sub_table::<1, 4>(), Tab::<1, 4>::T);
+        assert_eq!(sub_table::<14, 16>(), Tab::<14, 16>::T);
+    }
+
+    /// `write_digits_to_string` is only ever called with a non-empty digit
+    /// slice by real encode paths; drive the empty-slice guard directly.
+    #[test]
+    fn write_digits_to_string_handles_empty_digits() {
+        let mut dst = [0u8; 4];
+        assert_eq!(write_digits_to_string(BITCOIN.config(), &[], &mut dst), 0);
+    }
+
+    /// `process_general` is only reached through `encode_scratch`, which never
+    /// calls it below 65 bytes, so its `src.len() >= 64` guard is always true
+    /// in practice. Call it directly below that threshold to cover the
+    /// skipped-block path, and check the result against the public encoder.
+    #[test]
+    fn process_general_below_64_bytes_matches_public_api() {
+        let data: Vec<u8> = (0..40u32).map(|i| (i * 37 + 5) as u8).collect();
+        let mut limbs = [0u32; MEDIUM_LIMBS];
+        let mut tmp = [0u64; MEDIUM_LIMBS];
+        let mut digits = [0u64; MEDIUM_LIMBS / 2];
+        let n = process_general(&data, &mut limbs, &mut tmp, &mut digits);
+
+        let mut dst = [0u8; 64];
+        let len = write_digits_to_string(BITCOIN.config(), &digits[..n], &mut dst);
+        assert_eq!(
+            std::str::from_utf8(&dst[..len]).unwrap(),
+            BITCOIN.encode(&data).unwrap()
+        );
+    }
+
+    /// `encode_slice`'s own `InputTooBig` guard is shadowed by `Engine::encode_into`,
+    /// which checks the same limit first; call the kernel directly to reach it.
+    #[test]
+    fn encode_slice_rejects_oversized_input_directly() {
+        let mut dst = [0u8; 2048];
+        assert_eq!(
+            encode_slice(&[0u8; 1025], &mut dst, BITCOIN.config()),
+            Err(Error::InputTooBig)
+        );
+    }
+
+    /// An all-zero input past the `_into` size ceiling exercises
+    /// `encode_slice_unbounded`'s own empty-after-zeros return.
+    #[test]
+    #[cfg(feature = "std")]
+    fn encode_unbounded_all_zero_large_input() {
+        let input = vec![0u8; 2000];
+        let encoded = BITCOIN.encode(&input).unwrap();
+        assert_eq!(encoded, "1".repeat(2000));
+        assert_eq!(BITCOIN.decode(&encoded).unwrap(), input);
+    }
+
     #[test]
     fn scratch_classes_are_large_enough() {
         // Every length must fit the limb budget of the class it dispatches to.

@@ -418,6 +418,20 @@ fn test_roundtrip_random_data() {
     }
 }
 
+/// Every input length from 0 to 128 bytes, with fresh random data every run,
+/// across every predefined engine.
+#[test]
+fn test_roundtrip_every_length_0_to_128_random() {
+    for engine in [BITCOIN, RIPPLE, FLICKR, base58_turbo::MONERO] {
+        for len in 0..=128 {
+            let input = rng().random_iter::<u8>().take(len).collect::<Vec<_>>();
+            let encoded = engine.encode(&input).unwrap();
+            let decoded = engine.decode(&encoded).unwrap();
+            assert_eq!(input, decoded, "mismatch at length {len}");
+        }
+    }
+}
+
 // ======================================================================
 // 7. Cross-Validation Against Other Base58 Crates
 // ======================================================================
@@ -507,52 +521,6 @@ fn test_vs_five8_crate_bitcoin() {
             }
         }
     }
-}
-
-// ======================================================================
-// 8. Serde
-// ======================================================================
-
-#[cfg(feature = "serde")]
-#[test]
-fn test_serde_config_engine() {
-    let alpha = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-    let config = Config::new(alpha).unwrap();
-    let engine = Engine::new(alpha).unwrap();
-
-    let conf_json = serde_json::to_string(&config).unwrap();
-    assert_eq!(
-        conf_json,
-        format!("\"{}\"", std::str::from_utf8(alpha).unwrap())
-    );
-
-    let de_conf: Config = serde_json::from_str(&conf_json).unwrap();
-    assert_eq!(de_conf.alphabet, config.alphabet);
-
-    let eng_json = serde_json::to_string(&engine).unwrap();
-    assert_eq!(eng_json, conf_json);
-
-    let de_eng: Engine = serde_json::from_str(&eng_json).unwrap();
-    assert_eq!(de_eng.config().alphabet, engine.config().alphabet);
-
-    // Wrong-length alphabet.
-    let res: Result<Config, _> = serde_json::from_str("\"abc\"");
-    assert!(
-        res.unwrap_err()
-            .to_string()
-            .contains("expected exactly 58-byte alphabet")
-    );
-
-    // Duplicate characters, via both Config and Engine.
-    let mut bad_alpha = *alpha;
-    bad_alpha[57] = bad_alpha[0];
-    let bad_alpha_str = std::str::from_utf8(&bad_alpha).unwrap();
-
-    let res: Result<Config, _> = serde_json::from_str(&format!("\"{bad_alpha_str}\""));
-    assert!(res.is_err());
-
-    let res_eng: Result<Engine, _> = serde_json::from_str(&format!("\"{bad_alpha_str}\""));
-    assert!(res_eng.is_err());
 }
 
 // ======================================================================

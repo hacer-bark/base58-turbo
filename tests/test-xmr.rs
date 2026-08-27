@@ -49,3 +49,14 @@ fn test_vs_base58_monero_random() {
         assert_eq!(decoded, input, "xmr decoding mismatch at len {len}");
     }
 }
+
+/// Every input length from 0 to 128 bytes, with fresh random data every run.
+#[test]
+fn test_roundtrip_every_length_0_to_128_random() {
+    for len in 0..=128 {
+        let input = rng().random_iter::<u8>().take(len).collect::<Vec<_>>();
+        let encoded = xmr::encode(&input).unwrap();
+        let decoded = xmr::decode(&encoded).unwrap();
+        assert_eq!(input, decoded, "xmr mismatch at len {len}");
+    }
+}
