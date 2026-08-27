@@ -556,13 +556,14 @@ fn test_serde_config_engine() {
 }
 
 // ======================================================================
-// AVX2 parity (feature `unsafe-simd`)
+// Differential parity: kernel dispatch vs. an independent reference
 // ======================================================================
 
-/// The AVX2 kernel must agree with the scalar one on every 32-byte input,
-/// including the zero-prefixed shapes that change the output length.
+/// Every kernel-dispatch arm must agree with an independent reference on
+/// every 32-byte input, including the zero-prefixed shapes that change the
+/// output length.
 #[test]
-fn simd_matches_scalar_for_32_byte_inputs() {
+fn dispatch_matches_reference_for_32_byte_inputs() {
     fn xs(s: &mut u64) -> u64 {
         *s ^= *s << 13;
         *s ^= *s >> 7;
@@ -608,12 +609,8 @@ fn simd_matches_scalar_for_32_byte_inputs() {
     }
 }
 
-#[cfg(all(
-    feature = "unsafe-simd",
-    any(target_arch = "x86_64", target_arch = "x86")
-))]
 #[test]
-fn simd_batch_matches_single() {
+fn batch_matches_single() {
     fn xs(s: &mut u64) -> u64 {
         *s ^= *s << 13;
         *s ^= *s >> 7;
@@ -654,9 +651,9 @@ fn simd_batch_matches_single() {
     );
 }
 
-/// The 64-byte AVX2 kernel must agree with the scalar one everywhere too.
+/// The 64-byte kernel dispatch must agree with the reference everywhere too.
 #[test]
-fn simd_matches_scalar_for_64_byte_inputs() {
+fn dispatch_matches_reference_for_64_byte_inputs() {
     fn xs(s: &mut u64) -> u64 {
         *s ^= *s << 13;
         *s ^= *s >> 7;
@@ -699,10 +696,10 @@ fn simd_matches_scalar_for_64_byte_inputs() {
     }
 }
 
-/// The wide SIMD stores must stay inside a destination sized to exactly
-/// `encoded_len`, which is the contract `encode_into` enforces.
+/// The kernels must stay inside a destination sized to exactly `encoded_len`,
+/// which is the contract `encode_into` enforces.
 #[test]
-fn simd_respects_exact_output_buffers() {
+fn encode_respects_exact_output_buffers() {
     fn xs(s: &mut u64) -> u64 {
         *s ^= *s << 13;
         *s ^= *s >> 7;
@@ -764,8 +761,7 @@ fn reference_base58(input: &[u8], alphabet: [u8; 58]) -> String {
 // ----------------------------------------------------------------------
 //
 // Decoding short payloads goes through a flat weight matrix rather than the
-// bignum Horner loop, and with `unsafe-simd` a further AVX2 kernel handles
-// 32..=128 characters. Both are checked here against a schoolbook reference
+// bignum Horner loop. Both are checked here against a schoolbook reference
 // that shares no code with either.
 
 /// Schoolbook base-58 decode: repeated multiply-accumulate over base-256 bytes.

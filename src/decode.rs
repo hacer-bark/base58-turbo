@@ -444,16 +444,6 @@ macro_rules! mat_dispatch {
 /// Returns the number of bytes written.
 #[inline]
 fn decode_payload(config: &Config, src: &[u8], dst: &mut [u8]) -> Result<usize, Error> {
-    #[cfg(all(
-        feature = "unsafe-simd",
-        any(target_arch = "x86_64", target_arch = "x86")
-    ))]
-    {
-        if let Some(r) = crate::simd::decode_payload(config, src, dst) {
-            return r;
-        }
-    }
-
     if src.len() <= MAT_MAX_CHARS {
         mat_dispatch!(
             config,

@@ -6,7 +6,7 @@ edition = "2024"
 readme = "README.md"
 authors = ["Hacer-Bark <hacer.bark@proton.me>"]
 license = "0BSD"
-description = "A Rust Base58 codec that decodes past 2 GiB/s, with matrix-multiplication scalar kernels and an optional AVX2 path on x86/x86-64."
+description = "A Rust Base58 codec that decodes past 2 GiB/s, with matrix-multiplication scalar kernels. 100% safe Rust, #![forbid(unsafe_code)]."
 repository = "https://github.com/hacer-bark/base58-turbo"
 homepage = "https://github.com/hacer-bark/base58-turbo"
 documentation = "https://docs.rs/base58-turbo"
@@ -15,10 +15,9 @@ categories = ["encoding", "cryptography", "no-std"]
 exclude = ["benches/scripts/", "benches/results/"]
 
 [features]
-default = ["unsafe-simd", "std"]
+default = ["std"]
 std = []
 serde = ["std", "dep:serde"]
-unsafe-simd = ["std"]
 
 [dependencies]
 serde = { version = "1", optional = true, features = ["derive"] }
@@ -39,6 +38,7 @@ unused = "deny"
 missing_docs = "deny"
 missing_debug_implementations = "deny"
 unreachable_pub = "deny"
+unsafe_code = "deny"
 
 [lints.clippy]
 all = "deny"
@@ -50,6 +50,10 @@ expect_used = "deny"
 panic = "deny"
 todo = "deny"
 unimplemented = "deny"
+
+[lints.rustdoc]
+all = "deny"
+broken_intra_doc_links = "deny"
 
 [[bench]]
 name = "encoding_bench"

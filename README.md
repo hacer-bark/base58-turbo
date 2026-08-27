@@ -1,15 +1,16 @@
 <div align="center">
   <h1>Base58 Turbo</h1>
-  <p><strong>A Rust Base58 codec that decodes past 2 GiB/s, with scalar kernels and an optional AVX2 path on x86/x86-64.</strong></p>
+  <p><strong>A Rust Base58 codec that decodes past 2 GiB/s, with scalar kernels. 100% safe Rust, <code>#![forbid(unsafe_code)]</code>.</strong></p>
 
   [![Crates.io](https://img.shields.io/crates/v/base58-turbo.svg?style=for-the-badge&color=fc8d62)](https://crates.io/crates/base58-turbo)
   [![License](https://img.shields.io/crates/l/base58-turbo.svg?style=for-the-badge&color=8da0cb)](https://crates.io/crates/base58-turbo)
   [![CI](https://img.shields.io/github/actions/workflow/status/hacer-bark/base58-turbo/tests.yml?label=CI&style=for-the-badge&color=e78ac3)](https://github.com/hacer-bark/base58-turbo/actions/workflows/tests.yml)
+  [![unsafe forbidden](https://img.shields.io/badge/unsafe-forbidden-success.svg?style=for-the-badge&color=66c2a5)](https://github.com/rust-secure-code/safety-dance/)
 </div>
 
 <br/>
 
-`base58-turbo` targets systems where CPU cycles are scarce. The default build enables `unsafe-simd`, which on x86/x86-64 adds one `unsafe` AVX2 module (`src/simd.rs`) — the crate's only `unsafe` code. Every other target, and any build with `unsafe-simd` off, is `#![forbid(unsafe_code)]`. See [Safety & Verification](#safety--verification).
+`base58-turbo` targets systems where CPU cycles are scarce. Every build is `#![forbid(unsafe_code)]` — there is no `unsafe` anywhere in the crate, on any target or feature combination. See [Safety & Verification](#safety--verification).
 
 `base58-turbo` beats `bs58`, `base58`, `base58-monero`, and `five8` at every payload size, peaking past 2 GiB/s on decode — over 2x `five8`'s best and 20x+ `bs58`. See [Benchmarks](#benchmarks).
 
@@ -79,7 +80,7 @@ Zero-allocation `xmr::encode_into` / `xmr::decode_into` are also provided.
 
 ## Benchmarks
 
-Numbers below come straight from `cargo bench` (`benches/encoding_bench.rs`), comparing `base58-turbo` against `bs58`, `base58`, `five8`, and `base58-monero` at payload sizes 16–128 bytes. `five8` only ships fixed-width 32/64-byte encoders. Default features are on, so `Turbo`/`Turbo_XMR` include the `unsafe-simd` AVX2 path — add `--no-default-features --features std` to bench the scalar kernels alone.
+Numbers below come straight from `cargo bench` (`benches/encoding_bench.rs`), comparing `base58-turbo` against `bs58`, `base58`, `five8`, and `base58-monero` at payload sizes 16–128 bytes. `five8` only ships fixed-width 32/64-byte encoders.
 
 **AWS `c8a.large` (AMD EPYC 9R45), chart above:** at 48 bytes, decode hits 2.36 GiB/s vs 97.9 MiB/s for `bs58` (+2369%) and 79.2 MiB/s for `base58` (+2954%). Against `five8`: decode wins at both sizes it supports (2.19 vs 1.11 GiB/s @ 32B, +97%; 2.34 vs 1.17 GiB/s @ 64B, +100%), and encode wins too (1.26 vs 0.87 GiB/s @ 32B, +44%; 1.32 vs 1.00 GiB/s @ 64B, +33%). XMR (block-chunked, slower than flat) still leads `base58-monero` by +142% decode / +390% encode at 48 bytes. Peak: 2.36 GiB/s decode, single-threaded.
 
@@ -120,17 +121,9 @@ full output — 32 B through 10 MB, every target.
 
 ## Safety & Verification
 
-`#![forbid(unsafe_code)]` applies conditionally in `lib.rs`: active whenever `unsafe-simd` is off, or on any target other than x86/x86-64. There, the compiler rejects any `unsafe` block in the crate — no pointer arithmetic, no manually-asserted invariant to audit.
+`#![forbid(unsafe_code)]` applies unconditionally in `lib.rs`: no feature flag, target, or configuration reintroduces `unsafe`. The compiler rejects any `unsafe` block anywhere in the crate — no pointer arithmetic, no manually-asserted invariant to audit. Performance comes entirely from the base conversion algorithm and from shaping the hot loops so the compiler can drop bounds checks on its own.
 
-**`unsafe-simd` is a default feature.** On x86/x86-64 it compiles in `src/simd.rs`, one module of AVX2 intrinsics reached only after a runtime AVX2 check — the crate's only `unsafe` code. For the compiler-enforced guarantee instead:
-
-```bash
-cargo add base58-turbo --no-default-features --features std
-```
-
-This drops to the scalar kernels and reinstates `#![forbid(unsafe_code)]`. Runtime dispatch means `unsafe-simd` never breaks correctness on hardware without AVX2 — it just falls back to scalar — so the tradeoff is purely whether you want that module in your dependency tree.
-
-The test suite guards against ordinary logic bugs in either configuration: exact conformance vectors, every kernel-dispatch and scratch-buffer boundary, randomized cross-validation against `bs58`, `base58`, `five8`, and `base58-monero`, and — with `unsafe-simd` on — AVX2 kernels checked against an independent schoolbook implementation. See [.github/workflows/tests.yml](.github/workflows/tests.yml).
+The test suite guards against ordinary logic bugs: exact conformance vectors, every kernel-dispatch and scratch-buffer boundary, and randomized cross-validation against `bs58`, `base58`, `five8`, and `base58-monero`. See [.github/workflows/tests.yml](.github/workflows/tests.yml).
 
 ## Feature Flags
 
@@ -138,7 +131,6 @@ The test suite guards against ordinary logic bugs in either configuration: exact
 | :--- | :---: | :--- |
 | `serde` | No | `serde` serialization/deserialization for `Config` and `Engine` |
 | `std` | Yes | `String`/`Vec` support; disable for `no_std` |
-| `unsafe-simd` | Yes | AVX2 kernels on x86/x86-64, selected at runtime; the crate's only `unsafe` code. Disable for `#![forbid(unsafe_code)]` |
 
 ## License
 

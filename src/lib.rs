@@ -3,10 +3,7 @@
 //! [![Crates.io](https://img.shields.io/crates/v/base58-turbo.svg)](https://crates.io/crates/base58-turbo)
 //! [![Documentation](https://docs.rs/base58-turbo/badge.svg)](https://docs.rs/base58-turbo)
 //! [![License](https://img.shields.io/github/license/hacer-bark/base58-turbo)](https://github.com/hacer-bark/base58-turbo/blob/main/LICENSE-APACHE)
-//!
-//! *(The default build enables `unsafe-simd`, which adds one `unsafe` AVX2
-//! module on x86/x86-64. Disable it — or build for a non-x86 target — for
-//! `#![forbid(unsafe_code)]`.)*
+//! [![unsafe forbidden](https://img.shields.io/badge/unsafe-forbidden-success.svg)](https://github.com/rust-secure-code/safety-dance/)
 //!
 //! A high-performance Base58 encoder/decoder for Rust, optimized for high-throughput systems.
 //!
@@ -54,44 +51,23 @@
 //! |---------|---------|-------------|
 //! | **`serde`** | **No** | Enables `serde` serialization/deserialization for Config and Engine. |
 //! | **`std`** | **Yes** | Enables `String` and `Vec` support. Disable this for `no_std` environments. |
-//! | **`unsafe-simd`** | **Yes** | AVX2 encoding and decoding kernels on x86/x86-64, selected at runtime. Adds the crate's only `unsafe` code; no effect on other targets. |
 //!
 //! ## Safety & Verification
 //!
-//! `unsafe-simd` is on by default, and on x86/x86-64 it enables one `unsafe`
-//! module, `src/simd.rs`, which holds the AVX2 kernels — the only `unsafe`
-//! in the crate. The kernels are reached only after a runtime AVX2 check, so
-//! a binary built with the feature still runs correctly on hardware without
-//! AVX2, and every non-x86 target keeps the scalar path regardless of the
-//! feature.
-//!
-//! Build with `default-features = false` (re-enabling `std` as needed) — or
-//! target a non-x86 platform — and `#![forbid(unsafe_code)]` applies: the
-//! compiler rejects any `unsafe` block anywhere in the crate. Performance in
-//! that configuration comes entirely from the base conversion algorithm and
-//! from shaping the hot loops so the compiler can drop bounds checks on its
-//! own, not from bypassing them.
+//! The crate is `#![forbid(unsafe_code)]` unconditionally: no feature flag,
+//! target, or configuration reintroduces `unsafe`. Performance comes entirely
+//! from the base conversion algorithm and from shaping the hot loops so the
+//! compiler can drop bounds checks on its own, not from bypassing them.
 //!
 //! *   **Tests:** exact conformance vectors, every kernel-dispatch and scratch-buffer
 //!     boundary, and randomized cross-validation against `bs58`, `base58`, `five8`,
 //!     and `base58-monero` (see `tests/`).
-//! *   **SIMD parity:** with `unsafe-simd` on, the AVX2 kernels are checked
-//!     against an independent schoolbook implementation for every leading-zero
-//!     run length and across several alphabets, and the batch entry point is
-//!     checked against the single-input one.
 //! *   **Fuzzing:** `fuzz/fuzz_targets/fuzz_all_modes.rs` exercises encode/decode
 //!     round-trips via `cargo fuzz`.
 
 #![cfg_attr(not(any(feature = "std", test)), no_std)]
 #![doc(issue_tracker_base_url = "https://github.com/hacer-bark/base58-turbo/issues/")]
-#![cfg_attr(
-    not(all(
-        feature = "unsafe-simd",
-        any(target_arch = "x86_64", target_arch = "x86")
-    )),
-    forbid(unsafe_code)
-)]
-#![forbid(elided_lifetimes_in_paths)]
+#![forbid(elided_lifetimes_in_paths, unsafe_code)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 #[cfg(all(doctest, feature = "std"))]
@@ -107,11 +83,6 @@ pub mod xmr;
 pub mod decode;
 pub mod encode;
 
-#[cfg(all(
-    feature = "unsafe-simd",
-    any(target_arch = "x86_64", target_arch = "x86")
-))]
-mod simd;
 use decode::decode_slice;
 #[cfg(feature = "std")]
 use decode::decode_slice_unbounded;
@@ -361,19 +332,11 @@ impl Engine {
         &self.config
     }
 
-    /// Encodes a batch of 32-byte inputs, three encodes in flight at a time.
-    ///
-    /// Requires the `unsafe-simd` feature and AVX2 at runtime; without either it
-    /// falls back to [`Engine::encode_into`] per input, so results are identical
-    /// either way.
+    /// Encodes a batch of 32-byte inputs.
     ///
     /// Each output record is a fixed 44 bytes, the longest a 32-byte input can
     /// encode to. `lens[i]` gives the meaningful length of `out[i]`, so the text
     /// for input `i` is `&out[i][..lens[i] as usize]`.
-    ///
-    /// A single encode is limited by its own dependency chain rather than by
-    /// throughput, so interleaving independent inputs is worth roughly 15% per
-    /// input over encoding them one at a time.
     ///
     /// # Errors
     ///
@@ -402,28 +365,6 @@ impl Engine {
     ) -> Result<(), Error> {
         if out.len() < inputs.len() || lens.len() < inputs.len() {
             return Err(Error::BufferTooSmall);
-        }
-
-        #[cfg(all(
-            feature = "unsafe-simd",
-            any(target_arch = "x86_64", target_arch = "x86")
-        ))]
-        {
-            if crate::simd::avx2_available() {
-                // SAFETY: AVX2 was just confirmed present, and the length checks
-                // above guarantee `out` and `lens` cover every input.
-                unsafe {
-                    let tabs = crate::simd::AlphaTables::new(&self.config);
-                    crate::simd::encode_32_x3(
-                        inputs,
-                        &tabs,
-                        self.config.alphabet[0],
-                        &mut out[..inputs.len()],
-                        &mut lens[..inputs.len()],
-                    );
-                }
-                return Ok(());
-            }
         }
 
         for (i, input) in inputs.iter().enumerate() {
