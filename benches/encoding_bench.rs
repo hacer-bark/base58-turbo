@@ -53,7 +53,6 @@ fn should_run(target_name: &str) -> bool {
 fn bench_comparison(c: &mut Criterion) {
     let mut group = c.benchmark_group("Base58_Performances");
 
-    // Logarithmic scaling is essential for viewing 32B vs 10MB
     group.plot_config(PlotConfiguration::default().summary_scale(AxisScale::Logarithmic));
     group.measurement_time(Duration::from_secs(5));
     group.warm_up_time(Duration::from_secs(3));
@@ -151,7 +150,7 @@ fn bench_comparison(c: &mut Criterion) {
         }
 
         // 5. XMR: Turbo is zero-allocation, base58-monero allocates by design
-        if should_run("xmr") || should_run("all") {
+        if should_run("xmr") {
             group.bench_with_input(
                 BenchmarkId::new("Encode/Turbo_XMR", size),
                 &input_data,
@@ -252,7 +251,7 @@ fn bench_comparison(c: &mut Criterion) {
         }
 
         // 5. XMR
-        if should_run("xmr") || should_run("all") {
+        if should_run("xmr") {
             let encoded_xmr = base58_turbo::xmr::encode(&input_data).unwrap();
             group.bench_with_input(
                 BenchmarkId::new("Decode/Turbo_XMR", size),

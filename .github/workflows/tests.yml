@@ -36,12 +36,10 @@ jobs:
         run: cargo fmt --all --check
       - name: cargo-audit
         run: cargo audit
-      - name: clippy (default features, unsafe-simd on)
+      - name: clippy
         run: cargo clippy --locked --all-targets
-      - name: clippy (all features)
-        run: cargo clippy --locked --all-targets --all-features
-      - name: clippy (forbid(unsafe_code) build, lib only)
-        run: cargo clippy --locked --lib --no-default-features --features std
+      - name: clippy (no_std, lib only)
+        run: cargo clippy --locked --lib --no-default-features
       - uses: dtolnay/rust-toolchain@1.87
       - name: msrv (1.87)
         run: cargo +1.87 check --locked --all-features
@@ -67,16 +65,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: default (linux, unsafe-simd on x86-64)
+          - name: linux
             os: ubuntu-latest
-          - name: default (macos)
+          - name: macos
             os: macos-latest
-          - name: default (windows)
+          - name: windows
             os: windows-latest
-          - name: all features
-            flags: --all-features
-          - name: forbid(unsafe_code) build, unsafe-simd off
-            flags: --no-default-features --features std
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -85,10 +79,10 @@ jobs:
           prefix-key: v1-rust
           key: ${{ matrix.name }}
       - name: test
-        run: cargo test --locked ${{ matrix.flags }}
+        run: cargo test --locked
 
   test-x86:
-    name: "test (x86, unsafe-simd on ${{ matrix.target }})"
+    name: "test (32-bit, ${{ matrix.target }})"
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -105,10 +99,8 @@ jobs:
           key: ${{ matrix.target }}
       - name: install 32-bit toolchain
         run: sudo apt-get update && sudo apt-get install -y gcc-multilib libc6-dev-i386
-      - name: test (default features — exercises the AVX2 kernel via core::arch::x86)
+      - name: test
         run: cargo test --locked --target ${{ matrix.target }}
-      - name: check (forbid(unsafe_code) build)
-        run: cargo check --locked --target ${{ matrix.target }} --no-default-features --features std
 
   docs:
     name: rustdoc

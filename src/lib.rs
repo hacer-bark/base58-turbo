@@ -2,7 +2,7 @@
 //!
 //! [![Crates.io](https://img.shields.io/crates/v/base58-turbo.svg)](https://crates.io/crates/base58-turbo)
 //! [![Documentation](https://docs.rs/base58-turbo/badge.svg)](https://docs.rs/base58-turbo)
-//! [![License](https://img.shields.io/github/license/hacer-bark/base58-turbo)](https://github.com/hacer-bark/base58-turbo/blob/main/LICENSE-APACHE)
+//! [![License](https://img.shields.io/github/license/hacer-bark/base58-turbo)](https://github.com/hacer-bark/base58-turbo/blob/main/LICENSE)
 //! [![unsafe forbidden](https://img.shields.io/badge/unsafe-forbidden-success.svg)](https://github.com/rust-secure-code/safety-dance/)
 //!
 //! A high-performance Base58 encoder/decoder for Rust, optimized for high-throughput systems.
@@ -96,11 +96,11 @@ pub enum Error {
     InvalidCharacter,
     /// The output buffer is too small to hold the result.
     BufferTooSmall,
-    /// The input data is too big for the zero-allocation `_into` API. Limit is
-    /// 1024 bytes (encode) or 2048 bytes (decode); the allocating [`Engine::encode`]
-    /// / [`Engine::decode`] have no such limit.
+    /// The input is too big for the zero-allocation `_into` API: over 1024 bytes
+    /// to encode, or over 2048 characters or 1024 decoded bytes to decode. The
+    /// allocating [`Engine::encode`] / [`Engine::decode`] have no such limit.
     InputTooBig,
-    /// The input alphabet has duplicate chars.
+    /// The alphabet has a duplicate or non-ASCII character.
     WrongAlphabet,
 }
 
@@ -110,12 +110,11 @@ impl core::fmt::Display for Error {
             Self::InvalidCharacter => write!(f, "invalid character in base58 string"),
             Self::BufferTooSmall => write!(f, "output buffer too small"),
             Self::InputTooBig => write!(f, "input data too big"),
-            Self::WrongAlphabet => write!(f, "input alphabet has duplicate chars"),
+            Self::WrongAlphabet => write!(f, "alphabet has a duplicate or non-ASCII char"),
         }
     }
 }
 
-// Enable std::error::Error trait when the 'std' feature is active
 #[cfg(feature = "std")]
 impl std::error::Error for Error {}
 
@@ -123,7 +122,7 @@ impl std::error::Error for Error {}
 // Configuration & Types
 // ======================================================================
 
-/// Internal configuration containing pre-computed tables for an alphabet.
+/// Pre-computed lookup tables for one alphabet.
 #[derive(Debug, Clone, Copy)]
 pub struct Config {
     /// Alphabet of chars for encoding and decoding.
@@ -139,31 +138,20 @@ pub struct Config {
 
 impl Config {
     /// Creates a new configuration from a 58-byte alphabet.
-    /// Checks that all characters are unique.
     ///
     /// # Errors
     ///
     /// Returns [`Error::WrongAlphabet`] if the alphabet contains a non-ASCII byte
     /// or a duplicate character.
     pub const fn new(alphabet: &[u8; 58]) -> Result<Self, Error> {
-        // 1. Generate Decode Map & Check Uniqueness
         let mut map = [255u8; 256];
         let mut i: u8 = 0;
 
         while (i as usize) < 58 {
             let byte = alphabet[i as usize];
 
-            // ASCII Check:
-            // `encode` returns a `String`, so the alphabet must be valid UTF-8 on
-            // its own. Rejecting non-ASCII here is what lets that conversion be
-            // infallible.
-            if byte >= 0x80 {
-                return Err(Error::WrongAlphabet);
-            }
-
-            // Uniqueness Check:
-            // If the map position is not 255, it means we already saw this byte.
-            if map[byte as usize] != 255 {
+            // ASCII-only keeps `encode`'s `String` conversion infallible.
+            if byte >= 0x80 || map[byte as usize] != 255 {
                 return Err(Error::WrongAlphabet);
             }
 
@@ -171,7 +159,6 @@ impl Config {
             i += 1;
         }
 
-        // 2. Return valid Config
         Ok(Self {
             alphabet: *alphabet,
             decode_map: map,
@@ -185,8 +172,8 @@ impl Config {
 ///
 /// A valid entry is at most `57 * 58^3 = 11_121_384`, so the sum of any four is
 /// below `2^26`, while a sum containing at least one sentinel is at least `2^28`
-/// and at most `2^30`. One test of the bits above 26 therefore validates a whole
-/// group of four characters, with no per-character branch and nothing to mask.
+/// and at most `2^30`. One test of the bits from 26 up therefore validates a
+/// whole group of four characters, with no per-character branch.
 pub const BAD_DIGIT: u32 = 1 << 28;
 
 /// Builds the decode weight table: `[k][b] = digit(b) * 58^k` for `k` in 0..4.
@@ -263,7 +250,7 @@ const fn gen_lut_squared(alphabet: &[u8; 58]) -> [u16; 3364] {
     while i < 3364 {
         let c1 = alphabet[i / 58];
         let c2 = alphabet[i % 58];
-        // Store as Big Endian u16 for direct memory write
+        // Big-endian, so `to_be_bytes` yields the two chars in order.
         table[i] = ((c1 as u16) << 8) | (c2 as u16);
         i += 1;
     }
@@ -279,7 +266,8 @@ impl Engine {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::WrongAlphabet`] if the alphabet contains duplicates.
+    /// Returns [`Error::WrongAlphabet`] if the alphabet contains a non-ASCII byte
+    /// or a duplicate character.
     pub const fn new(alphabet: &[u8; 58]) -> Result<Self, Error> {
         match Config::new(alphabet) {
             Ok(c) => Ok(Self { config: c }),
@@ -318,7 +306,6 @@ impl Engine {
     /// let first = std::str::from_utf8(&out[0][..lens[0] as usize]).unwrap();
     /// assert_eq!(first, BITCOIN.encode(&inputs[0]).unwrap());
     /// ```
-    #[cfg(feature = "std")]
     pub fn encode_32_batch(
         &self,
         inputs: &[[u8; 32]],
@@ -343,17 +330,18 @@ impl Engine {
     // Length Calculators
     // ======================================================================
 
-    /// Returns the maximum possible length of the encoded data.
-    /// Base58 expansion is ~137%. We add padding for safety.
+    /// Returns an upper bound on the encoded length.
+    ///
+    /// Base58 needs `log(256) / log(58) ≈ 1.366` characters per byte; this
+    /// rounds that up to 1.37 and adds one.
     #[inline]
     #[must_use]
     pub const fn encoded_len(&self, input_len: usize) -> usize {
         (input_len.saturating_mul(137) / 100).saturating_add(1)
     }
 
-    /// Returns the maximum possible length of the decoded data.
-    /// Base58 '1's map 1:1 to bytes. We cannot assume compression.
-    /// The worst-case decoded size is equal to the input string length.
+    /// Returns an upper bound on the decoded length: the input length, since each
+    /// leading zero character decodes to one zero byte.
     #[inline]
     #[must_use]
     pub const fn decoded_len(&self, input_len: usize) -> usize {
@@ -407,9 +395,6 @@ impl Engine {
             return Err(Error::InputTooBig);
         }
 
-        // While decoding implies shrinking, we must ensure buffer is enough for the worst case.
-        // However, standard usage usually provides a buffer size == input size or calculated decoded_len.
-        // The safest check is:
         let req_len = self.decoded_len(input.len());
         if output.len() < req_len {
             return Err(Error::BufferTooSmall);
@@ -422,8 +407,7 @@ impl Engine {
     // Allocating APIs (std)
     // ========================================================================
 
-    /// Encodes `input` into the newly allocated `String`.
-    /// Returns the `String`.
+    /// Encodes `input` into a newly allocated `String`.
     ///
     /// Unlike [`Engine::encode_into`], there is no input size limit: inputs that
     /// exceed the zero-allocation kernel's stack-scratch ceiling fall back to heap
@@ -457,8 +441,7 @@ impl Engine {
         String::from_utf8(out).map_err(|_| Error::WrongAlphabet)
     }
 
-    /// Decodes `input` into the newly allocated `Vec<u8>`.
-    /// Returns the `Vec<u8>`.
+    /// Decodes `input` into a newly allocated `Vec<u8>`.
     ///
     /// Unlike [`Engine::decode_into`], there is no input size limit: inputs that
     /// exceed the zero-allocation kernel's stack-scratch ceiling (either in encoded

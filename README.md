@@ -1,6 +1,6 @@
 <div align="center">
   <h1>Base58 Turbo</h1>
-  <p><strong>A Rust Base58 codec that decodes past 2 GiB/s, with scalar kernels. 100% safe Rust, <code>#![forbid(unsafe_code)]</code>.</strong></p>
+  <p><strong>A Rust Base58 codec that decodes past 1.5 GiB/s with scalar kernels. 100% safe Rust, <code>#![forbid(unsafe_code)]</code>.</strong></p>
 
   [![Crates.io](https://img.shields.io/crates/v/base58-turbo.svg?style=for-the-badge&color=fc8d62)](https://crates.io/crates/base58-turbo)
   [![License](https://img.shields.io/crates/l/base58-turbo.svg?style=for-the-badge&color=8da0cb)](https://crates.io/crates/base58-turbo)
@@ -12,11 +12,7 @@
 
 `base58-turbo` targets systems where CPU cycles are scarce. Every build is `#![forbid(unsafe_code)]` — there is no `unsafe` anywhere in the crate, on any target or feature combination. See [Safety & Verification](#safety--verification).
 
-`base58-turbo` beats `bs58`, `base58`, `base58-monero`, and `five8` at every payload size, peaking past 2 GiB/s on decode — over 2x `five8`'s best and 20x+ `bs58`. See [Benchmarks](#benchmarks).
-
-<img alt="Base58 throughput by payload size on AWS c8a.large (AMD EPYC 9R45) — base58-turbo leads bs58, base58, base58-monero, and five8 at every size, decoding past 2 GiB/s" src="benches/results/throughput.png">
-
-<p align="center"><sub>AWS <code>c8a.large</code> (AMD EPYC 9R45). See <a href="#benchmarks">Benchmarks</a>.</sub></p>
+`base58-turbo` beats `bs58`, `base58`, and `base58-monero` at every measured payload size (7–40x `bs58` on decode), and beats `five8` everywhere except `five8`'s fixed-width 64-byte encoder. See [Benchmarks](#benchmarks).
 
 ## Quick Start
 
@@ -76,19 +72,13 @@ Zero-allocation `xmr::encode_into` / `xmr::decode_into` are also provided.
 
 **MSRV:** Rust 1.87.0 or newer.
 
-**API stability:** The public API (traits, structs, error types) is **Stable** and follows Semantic Versioning. It stays backward-compatible throughout the `0.3.x` lifecycle.
+**API stability:** Follows Semantic Versioning; while the crate is `0.x`, breaking changes bump the minor version. See [CHANGELOG.md](CHANGELOG.md).
 
 ## Benchmarks
 
-Numbers below come straight from `cargo bench` (`benches/encoding_bench.rs`), comparing `base58-turbo` against `bs58`, `base58`, `five8`, and `base58-monero` at payload sizes 16–128 bytes. `five8` only ships fixed-width 32/64-byte encoders.
+Numbers come from `cargo bench` (`benches/encoding_bench.rs`) on AWS `c8a.large` (AMD EPYC 9R45), comparing `base58-turbo` against `bs58`, `base58`, `five8`, and `base58-monero` at payload sizes 16–128 bytes. `five8` only ships fixed-width 32/64-byte codecs.
 
-**AWS `c8a.large` (AMD EPYC 9R45), chart above:** at 48 bytes, decode hits 2.36 GiB/s vs 97.9 MiB/s for `bs58` (+2369%) and 79.2 MiB/s for `base58` (+2954%). Against `five8`: decode wins at both sizes it supports (2.19 vs 1.11 GiB/s @ 32B, +97%; 2.34 vs 1.17 GiB/s @ 64B, +100%), and encode wins too (1.26 vs 0.87 GiB/s @ 32B, +44%; 1.32 vs 1.00 GiB/s @ 64B, +33%). XMR (block-chunked, slower than flat) still leads `base58-monero` by +142% decode / +390% encode at 48 bytes. Peak: 2.36 GiB/s decode, single-threaded.
-
-**AWS `c7i.large` (Intel Xeon Platinum 8488C), a smaller/cheaper box:**
-
-<img alt="Base58 throughput by payload size on AWS c7i.large (Intel Xeon Platinum 8488C) — a smaller instance run with the same methodology" src="benches/results/throughput-c7i.png">
-
-At 48 bytes: 1.59 GiB/s decode vs 84 MiB/s for `bs58` (+1790%) and 60 MiB/s for `base58` (+2553%). Against `five8`, decode wins clearly (1.38 vs 0.78 GiB/s @ 32B, +76%; 1.67 vs 0.70 GiB/s @ 64B, +139%), but encode is closer — `five8` edges ahead at 32B (0.70 vs 0.74 GiB/s, -5%) before `base58-turbo` retakes the lead at 64B (0.62 vs 0.55 GiB/s, +13%). Both machines show the same relative ordering and shape, differing by ~1.5x in absolute ceiling — the 2 GiB/s+ figure is a real peak on real hardware, not a universal constant.
+At 48 bytes, decode runs at 1.57 GiB/s vs 95.5 MiB/s for `bs58` (+1584%) and 78.2 MiB/s for `base58` (+1958%). Against `five8`, decode wins at both sizes it supports (1.59 vs 1.10 GiB/s @ 32B, +45%; 1.57 vs 1.16 GiB/s @ 64B, +36%). Encode wins at 32B (1.23 vs 0.86 GiB/s, +43%) but loses at 64B (582 MiB/s vs 1.11 GiB/s, -49%). XMR (block-chunked, slower than flat) leads `base58-monero` by +155% decode / +414% encode at 48 bytes. Peak: 1.59 GiB/s decode, single-threaded.
 
 Reproduce on a fresh checkout with nothing else running:
 
@@ -100,22 +90,14 @@ source "$HOME/.cargo/env"
 git clone https://github.com/hacer-bark/base58-turbo
 cd base58-turbo
 RUSTFLAGS="-C target-cpu=native" BENCH_TARGET=all cargo bench 2>&1 | tee benches/results/raw.txt
-python3 benches/scripts/plot_bench.py benches/results/raw.txt
+python3 benches/scripts/plot_bench.py benches/results/raw.txt  # needs plotly + kaleido
 ```
 
 <details>
 <summary>Raw <code>cargo bench</code> output — AWS <code>c8a.large</code></summary>
 
 See [`benches/results/c8a-large-latest.txt`](benches/results/c8a-large-latest.txt) for the
-full output — 32 B through 10 MB, every target.
-
-</details>
-
-<details>
-<summary>Raw <code>cargo bench</code> output — AWS <code>c7i.large</code></summary>
-
-See [`benches/results/c7i-large-latest.txt`](benches/results/c7i-large-latest.txt) for the
-full output — 32 B through 10 MB, every target.
+full output — 16 B through 128 B, every target.
 
 </details>
 

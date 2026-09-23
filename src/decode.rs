@@ -22,8 +22,7 @@ const P4: u64 = 11_316_496;
 /// 58^k for k = 0..4, used to weight a partial group.
 const POW58: [u64; 4] = [1, 58, 3364, 195_112];
 
-/// Base 58^10 (~4.3 * 10^17).
-/// This fits in a u64, allowing us to process 10 characters per bignum iteration.
+/// 58^10, the largest power of 58 below 2^64: ten characters per bignum step.
 const RADIX_58_10: u64 = 430_804_206_899_405_824;
 
 // ----------------------------------------------------------------------
@@ -43,8 +42,7 @@ const _: () = assert!(MAX_WORDS + 2 <= LARGE_WORDS, "large class too tight");
 /// outside the alphabet.
 ///
 /// The group-of-four parse sums four `lut_58_pow` entries and tests against this
-/// once. That is only a valid-character check while the three assertions below
-/// hold, so they are asserted rather than left as a comment.
+/// once, which is only sound while the three assertions below hold.
 const GROUP_BAD: u32 = 1 << 26;
 /// Largest sum four in-alphabet [`crate::Config::lut_58_pow`] entries can reach.
 const GROUP_MAX: u32 = 4 * 57 * 195_112;
@@ -66,15 +64,11 @@ const _: () = assert!(
 // Arithmetic Helpers
 // ----------------------------------------------------------------------
 
-/// Multiplies the bignum by `multiplier` and adds `addend`.
+/// `digits = digits * multiplier + addend` over little-endian u64 words.
+/// Returns false if the result does not fit `digits`.
 ///
-/// `bignum = bignum * multiplier + addend`
-///
-/// Operates on Little Endian u64 digits. Returns true on success, false on overflow.
-///
-/// Every `as u64` truncation below discards only the high half of a 128-bit
-/// product/carry that the surrounding arithmetic has already accounted for
-/// (the high half is threaded through `carry`), so no bits that matter are lost.
+/// The `as u64` truncations keep the low half of a 128-bit value whose high half
+/// is carried on.
 #[inline]
 #[allow(clippy::cast_possible_truncation)]
 fn bignum_mul_add(digits: &mut [u64], count: &mut usize, multiplier: u64, addend: u64) -> bool {
@@ -82,7 +76,7 @@ fn bignum_mul_add(digits: &mut [u64], count: &mut usize, multiplier: u64, addend
     let mul = u128::from(multiplier);
     let len = *count;
 
-    // Standard schoolbook multiplication-with-carry (unrolled 2x)
+    // Unrolled 2x.
     let mut chunks = digits[..len].chunks_exact_mut(2);
     for pair in chunks.by_ref() {
         let r0 = u128::from(pair[0]) * mul + carry;
@@ -97,7 +91,6 @@ fn bignum_mul_add(digits: &mut [u64], count: &mut usize, multiplier: u64, addend
         carry = result >> 64;
     }
 
-    // Expand bignum if there is a remaining carry
     if carry > 0 {
         if len >= digits.len() {
             return false;
@@ -108,8 +101,7 @@ fn bignum_mul_add(digits: &mut [u64], count: &mut usize, multiplier: u64, addend
     true
 }
 
-/// Parses a tail of 1-9 Base58 characters into a u64 value.
-/// Also calculates the effective multiplier (58^len) for that chunk.
+/// Parses a tail of 1-9 Base58 characters, returning `(value, 58^len)`.
 #[inline]
 fn parse_chunk(config: &Config, src: &[u8]) -> Result<(u64, u64), Error> {
     let lut = &config.lut_58_pow;
@@ -191,8 +183,6 @@ fn accumulate(
 ) -> Result<usize, Error> {
     let mut count = 1;
 
-    // Process full chunks of 10 characters (Base 58^10).
-    // This reduces the bignum loop overhead by 10x.
     let mut chunks = src.chunks_exact(10);
     for chunk in chunks.by_ref() {
         // `chunks_exact(10)` guarantees every `chunk` is exactly 10 bytes.
@@ -207,7 +197,6 @@ fn accumulate(
         }
     }
 
-    // Process remaining tail (1-9 characters)
     let tail = chunks.remainder();
     if !tail.is_empty() {
         let (value, multiplier) = parse_chunk(config, tail)?;
@@ -226,13 +215,11 @@ fn accumulate(
 /// Writes the accumulated bignum out as big-endian bytes, left-aligned in `dst`.
 /// Returns the number of bytes written.
 ///
-/// The `val as u8` truncation below is the intended byte-at-a-time extraction of
-/// a word being shifted right by 8 each iteration, not a lossy narrowing.
+/// The `val as u8` truncation takes the low byte of a word being shifted out.
 #[inline]
 #[allow(clippy::cast_possible_truncation)]
 fn emit(bignum: &[u64], dst: &mut [u8]) -> Result<usize, Error> {
-    // Convert Little Endian u64 words to a Big Endian byte stream.
-    // We write backwards from the end of the destination buffer.
+    // Written backwards from the end of `dst`.
     let mut out_idx = dst.len();
     let mut i = 0;
 
@@ -258,15 +245,14 @@ fn emit(bignum: &[u64], dst: &mut [u8]) -> Result<usize, Error> {
         }
     }
 
-    // Skip leading zeros written by the loop (not the explicit leading zeros,
-    // which the caller already placed ahead of this slice).
+    // Strip the zero bytes above the value's top byte; explicit leading zeros
+    // were already written by the caller, ahead of this slice.
     let start = dst[out_idx..]
         .iter()
         .position(|&b| b != 0)
         .map_or(dst.len(), |off| out_idx + off);
     let length = dst.len() - start;
 
-    // Move the valid payload to the start of the buffer (memmove)
     dst.copy_within(start.., 0);
 
     Ok(length)
@@ -292,20 +278,13 @@ fn emit(bignum: &[u64], dst: &mut [u8]) -> Result<usize, Error> {
 // output radix is 2^32, normalizing the columns is carry-and-shift — decode
 // never divides, which is the one place it has an easier job than encode.
 //
-// The weights are triangular (58^0 fills one limb, 58^36 fills seven), and LLVM
-// folds the zero entries away because the table is a constant: the 44-character
-// case compiles to 40 multiplies rather than the 99 a dense read would give.
+// The weights are triangular (58^0 fills one limb, 58^20 fills four), and LLVM
+// folds the zero entries away because the table is a constant.
 //
-// In isolation this beats the Horner loop out to about 40 characters, where the
-// O(C^2) multiply count catches up with Horner's O(C^2/10) 128-bit multiplies.
-// `MAT_MAX_CHARS` is nonetheless 24, which is lower, because the threshold was
-// then measured through the public API rather than in isolation: carrying arms
-// out to 40 made `decode_payload` big enough to hurt its own inlining, and
-// 22-character inputs got *slower* (25.9ns) than with the shorter table
-// (21.5ns). Outlining the dispatch to shrink the caller was also tried and was
-// worse still, since short inputs then pay a call they cannot amortise.
-//
-// Both numbers are from a Coffee Lake i7-8750H. Re-measure before moving this.
+// In isolation this beats the Horner loop out to about 40 characters, but more
+// arms made `decode_payload` too big to inline well: through the public API, 24
+// is the measured sweet spot (i7-8750H). Outlining the dispatch was slower still.
+// Re-measure before moving `MAT_MAX_CHARS`.
 
 /// Longest payload, in characters, handled by the matrix path.
 const MAT_MAX_CHARS: usize = 24;
@@ -348,9 +327,8 @@ static MAT_W: [[u32; MAT_MAXL]; MAT_MAXE] = mat_weights();
 
 /// Parses `C` characters into `R` base-58^4 digits, left-padded.
 ///
-/// Only the first group can be partial. A group of four is a plain sum of four
-/// [`Config::lut_58_pow`] entries, so the per-character path has neither a
-/// multiply nor a branch; the sums are OR-ed and tested once at the end.
+/// Only the first group can be partial. Group sums are OR-ed and validated once
+/// at the end.
 #[inline]
 fn mat_parse<const C: usize, const R: usize>(
     config: &Config,
@@ -417,10 +395,9 @@ fn mat_multiply<const R: usize, const L: usize>(d: &[u32; R]) -> [u32; MAT_MAXL]
 /// Writes `limb` (little-endian base 2^32) into `dst` as big-endian bytes.
 ///
 /// `NBMIN` is the shortest output any valid payload of this character count can
-/// produce. Since 58 < 256 the longest is `NBMIN + 1`, so the length costs one
-/// `leading_zeros` and both likely copies are constant-size. The general arm
-/// exists for correctness — a caller that has not stripped leading zero
-/// characters can land there — not for speed.
+/// produce. Since 58 < 256 the longest is `NBMIN + 1`, so both likely copies
+/// are constant-size. The general arm only serves a payload that still has
+/// leading zero characters.
 #[inline]
 fn mat_emit<const L: usize, const NBMIN: usize>(
     limb: &[u32; MAT_MAXL],
@@ -476,8 +453,7 @@ macro_rules! mat_dispatch {
     };
 }
 
-/// Decodes the payload into the destination buffer.
-/// Returns the number of bytes written.
+/// Decodes a payload with no leading zero characters, returning the bytes written.
 #[inline]
 fn decode_payload(config: &Config, src: &[u8], dst: &mut [u8]) -> Result<usize, Error> {
     if src.len() <= MAT_MAX_CHARS {
@@ -537,8 +513,7 @@ fn decode_payload(config: &Config, src: &[u8], dst: &mut [u8]) -> Result<usize, 
 /// Counts the leading `zero_char` run in `input`, without writing anything.
 #[inline]
 fn count_leading_zeros(input: &[u8], zero_char: u8) -> usize {
-    // Scan 8 bytes at a time against a splatted zero character, then finish
-    // byte-wise. Mirrors the vectorized skip on the encode side.
+    // Eight bytes at a time against a splatted zero character, then byte-wise.
     let z_pattern = 0x0101_0101_0101_0101_u64 * u64::from(zero_char);
 
     let mut leading_zeros = 0;
@@ -592,10 +567,8 @@ pub fn decode_slice(input: &[u8], dst: &mut [u8], config: &Config) -> Result<usi
         return Err(Error::BufferTooSmall);
     }
 
-    // Write the zeros
     dst[..leading_zeros].fill(0);
 
-    // Decode the rest (the payload)
     let src = &input[leading_zeros..];
     if src.is_empty() {
         return Ok(leading_zeros);
@@ -701,10 +674,9 @@ mod tests {
         assert_eq!(mat_weights(), MAT_W);
     }
 
-    /// `accumulate`'s three `InputTooBig` returns are unreachable through the
-    /// public API, since every length class sizes its scratch generously above
-    /// `MAX_WORDS`. Drive each one directly with undersized scratch or a tight
-    /// `max_words` ceiling.
+    /// Drives all four of `accumulate`'s `InputTooBig` returns with undersized
+    /// scratch or a tight `max_words`; the capacity ones are unreachable through
+    /// the public API.
     #[test]
     fn accumulate_rejects_overflow_at_every_check() {
         let config = BITCOIN.config();
@@ -751,9 +723,9 @@ mod tests {
         assert_eq!(emit(&bignum, &mut dst), Err(Error::BufferTooSmall));
     }
 
-    /// `mat_emit`'s general (neither `NBMIN` nor `NBMIN + 1`) length branch is
-    /// dead in the real dispatch table, where `NBMIN` is always calibrated to
-    /// the widest character count; call it directly with a mismatched `NBMIN`.
+    /// `mat_emit`'s general length branch is unreachable from `decode_payload`,
+    /// which strips leading zero characters first; call it with a mismatched
+    /// `NBMIN`.
     #[test]
     fn mat_emit_general_length_branch() {
         let limb = [0xFFFF_FFFFu32, 0, 0, 0, 0];
@@ -763,10 +735,8 @@ mod tests {
         assert_eq!(dst[..4], [0xFF, 0xFF, 0xFF, 0xFF]);
     }
 
-    /// `decode_slice`'s own oversized-input and oversized-decoded-length guards
-    /// are shadowed by `Engine::decode_into`'s pre-check for the first, and are
-    /// reachable through the public API for the second -- covered here for
-    /// both, directly and through the engine.
+    /// `decode_slice`'s oversized-input guard is shadowed by
+    /// `Engine::decode_into`'s own check; call the kernel directly.
     #[test]
     fn decode_slice_rejects_oversized_input_directly() {
         let mut dst = [0u8; 4096];
@@ -776,9 +746,8 @@ mod tests {
         );
     }
 
-    /// `decode_slice`'s leading-zero `BufferTooSmall` guard is reachable through
-    /// the public API too, but exercising it directly keeps this test isolated
-    /// from `Engine::decode_into`'s own, earlier buffer-size check.
+    /// `decode_slice`'s leading-zero `BufferTooSmall` guard, isolated from
+    /// `Engine::decode_into`'s earlier buffer check.
     #[test]
     fn decode_slice_rejects_buffer_too_small_for_leading_zeros() {
         let mut dst = [0u8; 2];
@@ -788,10 +757,8 @@ mod tests {
         );
     }
 
-    /// `decode_slice`'s own `total_len > 1024` guard, distinct from
-    /// `accumulate`'s `max_words` ceiling: the payload alone must stay under
-    /// that word budget, with leading zeros pushing the *total* output past
-    /// 1024 bytes on top of it.
+    /// `decode_slice`'s `total_len > 1024` guard: the payload fits `MAX_WORDS`,
+    /// but the leading zeros push the total past 1024 bytes.
     #[test]
     fn decode_slice_rejects_total_length_over_1024_bytes() {
         let text = "1".repeat(50) + &"z".repeat(1380);

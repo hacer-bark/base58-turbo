@@ -1,8 +1,8 @@
 //! Monero-specific Base58 chunked encoding and decoding.
 //!
-//! Monero uses a custom chunked algorithm to ensure fixed-size addresses.
-//! Data is broken up into 8-byte blocks, which are each encoded into 11
-//! characters. The final block is padded to a specific size.
+//! Data is split into 8-byte blocks, each encoded as exactly 11 characters. A
+//! shorter final block is padded to the fixed width for its byte count, so the
+//! encoded length depends only on the input length.
 
 use crate::{Error, MONERO};
 
@@ -13,7 +13,7 @@ use std::vec::Vec;
 
 const XMR_ENCODED_SIZES: [usize; 9] = [0, 2, 3, 5, 6, 7, 9, 10, 11];
 
-/// Returns the maximum possible length of the encoded Monero data.
+/// Returns the exact encoded length for `input_len` bytes.
 #[inline]
 #[must_use]
 pub const fn encoded_len(input_len: usize) -> usize {
@@ -22,8 +22,8 @@ pub const fn encoded_len(input_len: usize) -> usize {
     (full_blocks * 11) + XMR_ENCODED_SIZES[remainder]
 }
 
-/// Returns the exact length of the decoded Monero data based on string length.
-/// Returns None if the string length is invalid for Monero Base58.
+/// Returns the exact decoded length for `input_len` characters, or `None` if no
+/// input encodes to that many characters.
 #[inline]
 #[must_use]
 pub const fn decoded_len(input_len: usize) -> Option<usize> {
@@ -51,8 +51,7 @@ pub const fn decoded_len(input_len: usize) -> Option<usize> {
     }
 }
 
-/// Encodes a slice of bytes into a Monero Base58 string into the provided buffer.
-/// Returns the number of bytes written.
+/// Encodes `input` into `output`, returning the number of bytes written.
 ///
 /// # Errors
 ///
@@ -74,18 +73,14 @@ pub fn encode_into<T: AsRef<[u8]>>(input: T, output: &mut [u8]) -> Result<usize,
     for chunk in input.chunks(8) {
         let target_len = XMR_ENCODED_SIZES[chunk.len()];
 
-        // Max standard encoding length for 8 bytes is 11
         let mut temp = [0u8; 11];
         let actual_len = MONERO.encode_into(chunk, &mut temp)?;
 
-        // Pad with '1's (alphabet[0] which is '1')
+        // '1' is the Monero alphabet's zero digit.
         let pad_len = target_len.saturating_sub(actual_len);
-        for _ in 0..pad_len {
-            output[out_idx] = b'1';
-            out_idx += 1;
-        }
+        output[out_idx..out_idx + pad_len].fill(b'1');
+        out_idx += pad_len;
 
-        // Copy the actual encoded bytes
         output[out_idx..out_idx + actual_len].copy_from_slice(&temp[..actual_len]);
         out_idx += actual_len;
     }
@@ -93,8 +88,7 @@ pub fn encode_into<T: AsRef<[u8]>>(input: T, output: &mut [u8]) -> Result<usize,
     Ok(out_idx)
 }
 
-/// Decodes a Monero Base58 string into the provided buffer.
-/// Returns the number of bytes written.
+/// Decodes `input` into `output`, returning the number of bytes written.
 ///
 /// # Errors
 ///
@@ -115,43 +109,29 @@ pub fn decode_into<T: AsRef<[u8]>>(input: T, output: &mut [u8]) -> Result<usize,
     let mut out_idx = 0;
 
     for chunk_chars in input.chunks(11) {
-        let chunk_len = chunk_chars.len();
+        let expected_bytes = XMR_ENCODED_SIZES
+            .iter()
+            .position(|&n| n == chunk_chars.len())
+            .ok_or(Error::InvalidCharacter)?;
 
-        // Find expected decoded size
-        let mut expected_bytes = 0;
-        for (bytes, &chars_len) in XMR_ENCODED_SIZES.iter().enumerate() {
-            if chars_len == chunk_len {
-                expected_bytes = bytes;
-                break;
+        // Leading '1's decode to zero bytes, so 11 characters can yield 11 bytes.
+        let mut temp = [0u8; 11];
+        let written = MONERO.decode_into(chunk_chars, &mut temp)?;
+
+        if written > expected_bytes {
+            let excess = written - expected_bytes;
+            // The block's value overflows its byte width.
+            if temp[..excess].iter().any(|&b| b != 0) {
+                return Err(Error::InvalidCharacter);
             }
-        }
-
-        if expected_bytes == 0 {
-            return Err(Error::InvalidCharacter);
-        }
-
-        let chunk_str = core::str::from_utf8(chunk_chars).map_err(|_| Error::InvalidCharacter)?;
-
-        let mut temp = [0u8; 11]; // Up to 11 ones could decode to 11 bytes
-        let decoded_len = MONERO.decode_into(chunk_str, &mut temp)?;
-
-        if decoded_len > expected_bytes {
-            let excess = decoded_len - expected_bytes;
-            for &b in &temp[..excess] {
-                if b != 0 {
-                    return Err(Error::InvalidCharacter); // Overflow
-                }
-            }
-            output[out_idx..out_idx + expected_bytes].copy_from_slice(&temp[excess..decoded_len]);
+            output[out_idx..out_idx + expected_bytes].copy_from_slice(&temp[excess..written]);
             out_idx += expected_bytes;
         } else {
-            let pad_len = expected_bytes - decoded_len;
-            for _ in 0..pad_len {
-                output[out_idx] = 0;
-                out_idx += 1;
-            }
-            output[out_idx..out_idx + decoded_len].copy_from_slice(&temp[..decoded_len]);
-            out_idx += decoded_len;
+            let pad_len = expected_bytes - written;
+            output[out_idx..out_idx + pad_len].fill(0);
+            out_idx += pad_len;
+            output[out_idx..out_idx + written].copy_from_slice(&temp[..written]);
+            out_idx += written;
         }
     }
 
@@ -176,12 +156,11 @@ pub fn encode<T: AsRef<[u8]>>(input: T) -> Result<String, Error> {
     let actual_len = encode_into(input, &mut out)?;
     out.truncate(actual_len);
 
-    // The Monero alphabet is ASCII, so this conversion always succeeds; the
-    // error path is unreachable.
+    // The Monero alphabet is ASCII, so this never fails.
     String::from_utf8(out).map_err(|_| Error::WrongAlphabet)
 }
 
-/// Decodes `input` Monero Base58 string into a newly allocated `Vec<u8>`.
+/// Decodes `input` into a newly allocated `Vec<u8>`.
 ///
 /// # Errors
 ///

@@ -319,13 +319,22 @@ fn test_allocating_api_has_no_size_limit() {
         assert_eq!(BITCOIN.decode(&encoded).unwrap(), input, "zeros {zeros}");
     }
 
+    // A long zero prefix leaves the unbounded path a short payload, below the
+    // general kernel's 64-byte block.
+    for body in [1usize, 31, 32, 63, 64, 65] {
+        let mut input = vec![0u8; 1100];
+        input.extend(rng().random_iter::<u8>().take(body));
+        let encoded = BITCOIN.encode(&input).unwrap();
+        assert_eq!(BITCOIN.decode(&encoded).unwrap(), input, "body {body}");
+    }
+
     let big_string = "1".repeat(5_000);
     assert_eq!(BITCOIN.decode(&big_string).unwrap(), vec![0u8; 5_000]);
 }
 
 #[test]
 fn test_error_wrong_alphabet_duplicate() {
-    // Two 'a's, missing 'b'.
+    // 'a' repeats.
     let bad_alpha = *b"a123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxa";
     assert_eq!(Engine::new(&bad_alpha).unwrap_err(), Error::WrongAlphabet);
 }
@@ -347,7 +356,7 @@ fn test_error_display() {
     assert_eq!(Error::InputTooBig.to_string(), "input data too big");
     assert_eq!(
         Error::WrongAlphabet.to_string(),
-        "input alphabet has duplicate chars"
+        "alphabet has a duplicate or non-ASCII char"
     );
 }
 
@@ -355,16 +364,15 @@ fn test_error_display() {
 // 5. Kernel & Scratch-Class Boundaries
 // ======================================================================
 //
-// The encoder dispatches dedicated kernels at 25, 32 and 64 bytes, and scratch
-// buffers sized for <=24, <=64, <=320 and <=1024 bytes elsewhere. These lengths,
-// and their immediate neighbours, are where an off-by-one in the dispatch would
-// show up.
+// The encoder dispatches the matrix kernel up to 56 bytes, fixed kernels at 32
+// and 57..=64, and general-kernel scratch classes up to 320 and 1024 bytes.
+// These lengths and their neighbours are where a dispatch off-by-one would show.
 
 #[test]
 fn test_roundtrip_boundary_lengths() {
     let lens = [
-        0, 1, 3, 4, 15, 16, 23, 24, 25, 26, 31, 32, 33, 63, 64, 65, 79, 80, 81, 95, 96, 127, 128,
-        129, 191, 192, 255, 256, 319, 320, 321, 511, 512, 639, 640, 1023, 1024,
+        0, 1, 3, 4, 15, 16, 23, 24, 25, 26, 31, 32, 33, 55, 56, 57, 63, 64, 65, 79, 80, 81, 95, 96,
+        127, 128, 129, 191, 192, 255, 256, 319, 320, 321, 511, 512, 639, 640, 1023, 1024,
     ];
 
     for len in lens {
@@ -381,9 +389,6 @@ fn test_roundtrip_zero_prefix_at_boundaries() {
     // "skip zeros, then dispatch on remaining length" split gets covered too.
     for &zeros in &[0usize, 1, 7, 8, 9, 24, 32, 64] {
         for &body in &[0usize, 1, 24, 25, 32, 64, 65, 128] {
-            if zeros + body > 1024 {
-                continue;
-            }
             let mut input = vec![0u8; zeros];
             input.extend(rng().random_iter::<u8>().take(body));
 
@@ -392,16 +397,6 @@ fn test_roundtrip_zero_prefix_at_boundaries() {
             assert_eq!(decoded, input, "mismatch at zeros={zeros} body={body}");
         }
     }
-}
-
-#[test]
-fn test_decode_large_payload_normalization() {
-    // A single low-value digit leaves leading zero words inside the internal
-    // bignum before the emission phase strips them back out.
-    let mut out = [0u8; 10];
-    let len = BITCOIN.decode_into("2", &mut out).unwrap();
-    assert_eq!(len, 1);
-    assert_eq!(out[0], 0x01);
 }
 
 // ======================================================================
@@ -502,24 +497,27 @@ fn test_vs_base58_crate_bitcoin() {
 
 #[test]
 fn test_vs_five8_crate_bitcoin() {
-    use five8::{decode_32, decode_64};
+    use five8::{decode_32, decode_64, encode_32, encode_64};
 
     // five8 only supports fixed 32- and 64-byte payloads.
-    for &len in &[32usize, 64] {
-        let input = rng().random_iter::<u8>().take(len).collect::<Vec<_>>();
-        let encoded = BITCOIN.encode(&input).unwrap();
+    for _ in 0..100 {
+        let input: [u8; 32] = rng().random();
+        let mut buf = [0u8; 44];
+        let n = encode_32(&input, &mut buf) as usize;
+        let expected = std::str::from_utf8(&buf[..n]).unwrap();
+        assert_eq!(BITCOIN.encode(input).unwrap(), expected);
+        let mut decoded = [0u8; 32];
+        decode_32(expected, &mut decoded).unwrap();
+        assert_eq!(BITCOIN.decode(expected).unwrap(), decoded);
 
-        if len == 32 {
-            let mut decoded = [0u8; 32];
-            if decode_32(encoded.as_bytes(), &mut decoded).is_ok() {
-                assert_eq!(decoded.as_slice(), input.as_slice());
-            }
-        } else {
-            let mut decoded = [0u8; 64];
-            if decode_64(encoded.as_bytes(), &mut decoded).is_ok() {
-                assert_eq!(decoded.as_slice(), input.as_slice());
-            }
-        }
+        let input: [u8; 64] = rng().random();
+        let mut buf = [0u8; 88];
+        let n = encode_64(&input, &mut buf) as usize;
+        let expected = std::str::from_utf8(&buf[..n]).unwrap();
+        assert_eq!(BITCOIN.encode(input).unwrap(), expected);
+        let mut decoded = [0u8; 64];
+        decode_64(expected, &mut decoded).unwrap();
+        assert_eq!(BITCOIN.decode(expected).unwrap(), decoded);
     }
 }
 
@@ -586,7 +584,6 @@ fn batch_matches_single() {
         *s
     }
     let mut s = 0xDEAD_BEEF_1234_5678u64;
-    // Sizes around the 3-wide stride so the scalar remainder path is covered.
     for n in [0usize, 1, 2, 3, 4, 5, 6, 7, 8, 17, 64] {
         let inputs: Vec<[u8; 32]> = (0..n)
             .map(|i| {
@@ -678,7 +675,7 @@ fn encode_respects_exact_output_buffers() {
     for len in [32usize, 64] {
         let cap = BITCOIN.encoded_len(len);
         for i in 0..4000 {
-            // Mix in zero-prefixed inputs, which take the narrow store path.
+            // Mix in zero-prefixed inputs, which dispatch to a shorter kernel.
             let z = if i % 8 == 0 { i % len } else { 0 };
             let data: Vec<u8> = (0..len)
                 .map(|k| if k < z { 0 } else { (xs(&mut s) >> 24) as u8 })
@@ -728,9 +725,9 @@ fn reference_base58(input: &[u8], alphabet: [u8; 58]) -> String {
 // Decoder: differential tests for the weight-matrix paths
 // ----------------------------------------------------------------------
 //
-// Decoding short payloads goes through a flat weight matrix rather than the
-// bignum Horner loop. Both are checked here against a schoolbook reference
-// that shares no code with either.
+// Payloads up to 24 characters decode through a flat weight matrix, longer ones
+// through the bignum Horner loop. Both are checked here against a schoolbook
+// reference that shares no code with either.
 
 /// Schoolbook base-58 decode: repeated multiply-accumulate over base-256 bytes.
 fn reference_decode(input: &[u8], config: &Config) -> Option<Vec<u8>> {
@@ -770,7 +767,7 @@ fn decode_test_engines() -> Vec<Engine> {
 }
 
 #[test]
-fn decode_matrix_matches_reference_exhaustively() {
+fn decode_matches_reference_at_every_length() {
     fn xs(s: &mut u64) -> u64 {
         *s ^= *s << 13;
         *s ^= *s >> 7;
@@ -781,8 +778,8 @@ fn decode_matrix_matches_reference_exhaustively() {
 
     for engine in decode_test_engines() {
         let cfg = engine.config();
-        // Every payload length across both matrix paths and past their ceiling,
-        // crossed with every leading-zero run length.
+        // Every payload length through the matrix path and well past it,
+        // crossed with short leading-zero runs.
         for len in 0..=136usize {
             for zeros in 0..=len.min(4) {
                 for trial in 0..12 {
@@ -814,9 +811,8 @@ fn decode_matrix_matches_reference_exhaustively() {
 fn decode_matrix_rejects_invalid_characters() {
     for engine in decode_test_engines() {
         let cfg = engine.config();
-        // An invalid byte at every position, at every length: the vector path
-        // validates 32 characters at a time and the scalar head separately, so
-        // position matters.
+        // An invalid byte at every position, at every length: characters are
+        // validated per group, and the partial groups sit at different offsets.
         for len in 1..=136usize {
             for pos in 0..len {
                 let mut input = vec![cfg.alphabet[7]; len];
@@ -898,7 +894,7 @@ fn decode_matrix_round_trips_random_payloads() {
 // ======================================================================
 //
 // The decoder reads characters in groups of four weighted by `lut_58_pow`, and
-// validates a whole group with one test of the bits above 26. The arms that can
+// validates a whole group with one test of the bits from 26 up. The arms that can
 // go wrong are the partial ones -- the 1..4-character head of the matrix path,
 // the 10-character chunk's trailing pair, and the 1..9-character tail, whose
 // last 0..3 characters take a shorter weight. These sweep every character count

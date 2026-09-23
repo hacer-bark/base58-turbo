@@ -158,8 +158,7 @@ const MINI: usize = G_PAD + 16;
 /// Where the carry-select sweep cuts the 18-digit chain into three.
 const SWEEP_CUTS: [usize; 2] = [G_PAD + 6, G_PAD + 12];
 
-/// Limb budget per length class for the general kernel, which now only runs
-/// above 64 bytes.
+/// Limb budget per length class for the general kernel, which runs above 64 bytes.
 const MEDIUM_LIMBS: usize = 96; // <= 320 bytes -> 88 limbs
 const LARGE_LIMBS: usize = 288; // <= 1024 bytes -> 280 limbs
 
@@ -333,14 +332,13 @@ fn process_fixed_32(src: &[u8; 32], out_digits: &mut [u64; 5]) -> usize {
 
 /// Converts 64 bytes into 18 big-endian Base 58^5 digits, four to a lane.
 ///
-/// Column `k` of the result is at flat index `G_PAD + k`; the padding lanes stay
-/// zero because their weights are.
+/// Column `k` of the result is at flat index `G_PAD + k`; the padding columns
+/// stay zero because their weights are.
 ///
 /// Accumulation is row-major -- one input word against one whole table row --
 /// so the inner step walks 4 adjacent weights and LLVM keeps all five
-/// accumulator lanes in registers for the whole multiply. The column-major
-/// shape this replaced strides the table by a row per step, which lowers to
-/// gathers and costs about 4x.
+/// accumulator lanes in registers. Column-major strides the table by a row per
+/// step, which lowers to gathers and costs about 4x.
 ///
 /// Only column 16 can overflow a u64 over all sixteen rows (the rest peak at
 /// 2^63.75), so the batches are split there and only that one column is
@@ -480,25 +478,18 @@ fn encode_fixed_64(src: &[u8; 64], dst: &mut [u8], config: &Config) -> usize {
 // Small-Input Matrix Kernel (<= 56 bytes)
 // ----------------------------------------------------------------------
 //
-// The fixed 32/64 kernels above are fast because every trip count is a
-// compile-time constant, so the dot products unroll and vectorize. Every other
-// length under 64 bytes used to fall through to `process_general`, whose Horner
-// loop costs one division per limb per 4 input bytes; at 31 bytes that is a
-// serial chain of 36 divisions against the 9 of a matrix multiply.
-//
-// This kernel gives every length the fixed-kernel treatment. The input is
-// right-aligned into the low word-rows of `TABLE_64`, so one table serves all
-// widths, and W is a const generic so each length class monomorphizes into its
-// own unrolled body. The two widest classes are gone: 57 to 63 bytes
-// zero-extend into the 64-byte kernel instead, which is faster than either.
+// Gives every other length up to 56 bytes the fixed-kernel treatment: compile-time
+// trip counts, so the dot products unroll and vectorize, instead of the general
+// kernel's serial Horner divisions. The input is right-aligned into the low
+// word-rows of `TABLE_64`, so one table serves all widths, and W is a const
+// generic so each length class monomorphizes into its own unrolled body.
 
 /// Digit count per width, **rounded up to a multiple of four**.
 ///
 /// The rounding is not padding for its own sake. The dot product runs one
 /// column at a time over four adjacent weights, so a digit count that is not a
-/// whole number of 4-wide lanes leaves a scalar remainder and measures as a
-/// hard cliff -- at W = 12 the natural 14 digits ran 1.7x slower than 16 does.
-/// The extra columns are provably zero (see `sub_table_drops_only_zero_columns`),
+/// whole number of 4-wide lanes leaves a scalar remainder, measured 1.7x slower
+/// at W = 12 (14 digits vs 16). The extra columns are provably zero (see `sub_table_drops_only_zero_columns`),
 /// so they cost `W` multiply-adds and a couple of sweep limbs and buy back a
 /// clean trip count. `digits_for_w_is_lane_aligned_and_sufficient` checks this table,
 /// and the dispatch literals below have to match it.
@@ -510,7 +501,8 @@ const DIGITS_FOR_W: [usize; 15] = [0, 4, 4, 4, 8, 8, 8, 8, 12, 12, 12, 16, 16, 1
 ///
 /// Dropping the high columns is exact, not an approximation: a row for word `i`
 /// carries the weight `2^(32*i) < 2^(32*W)`, which needs at most `D` digits, so
-/// every entry above them is zero. Verified exhaustively for all 16 widths.
+/// every entry above them is zero; `sub_table_drops_only_zero_columns` checks
+/// every width the dispatch uses.
 const fn sub_table<const W: usize, const D: usize>() -> [[u32; D]; W] {
     let mut t = [[0u32; D]; W];
     let mut r = 0;
@@ -629,9 +621,9 @@ fn pack_pairs<const D: usize, const H: usize>(acc: &[u64; D], out: &mut [u64; H]
 }
 
 /// Encodes 1 to 56 bytes through the matrix kernel for width `W`.
-/// Kept `inline`: outlining the fourteen monomorphizations was measured both
-/// ways and costs 4% on small inputs (1.52x -> 1.46x) without buying back the
-/// >64-byte path, so the digit arrays are better off staying in registers.
+///
+/// Kept `inline`: outlining the fourteen monomorphizations measured 4% slower on
+/// small inputs.
 #[inline]
 fn process_small<const W: usize, const D: usize, const H: usize>(
     src: &[u8],
@@ -785,16 +777,13 @@ fn horner_step(digits_5: &mut [u32], count_5: &mut usize, multiplier: u64, chunk
     }
 }
 
-/// General processor for variable lengths.
-/// Internal State: Base 58^5 (u32 array).
+/// General kernel for inputs above 64 bytes, with Base 58^5 `u32` limbs as state.
 ///
-/// Deliberately `inline` rather than `inline(always)`: the dispatch below calls it
-/// from four length classes, and duplicating the whole body into each one costs more
-/// in instruction cache than the call saves.
+/// Deliberately `inline` rather than `inline(always)`: it has three callers (two
+/// scratch classes and the unbounded path), and duplicating the whole body into
+/// each costs more in instruction cache than the call saves.
 ///
-/// The `as u32` truncations are remainders of division by `RADIX_58_5 < 2^32`, and
-/// the `as u64` truncations pack two Base 58^5 digits (each `< RADIX_58_5 < 2^32`)
-/// into a Base 58^10 digit, so both always fit their target type.
+/// The `as u32` truncations are remainders of division by `RADIX_58_5 < 2^32`.
 #[inline]
 #[allow(clippy::cast_possible_truncation)]
 fn process_general(
@@ -1165,10 +1154,9 @@ mod tests {
         assert_eq!(write_digits_to_string(BITCOIN.config(), &[], &mut dst), 0);
     }
 
-    /// `process_general` is only reached through `encode_scratch`, which never
-    /// calls it below 65 bytes, so its `src.len() >= 64` guard is always true
-    /// in practice. Call it directly below that threshold to cover the
-    /// skipped-block path, and check the result against the public encoder.
+    /// `process_general` below 64 bytes is only reached through
+    /// `encode_slice_unbounded` with a long zero prefix; call it directly to
+    /// cover the no-block path and check it against the public encoder.
     #[test]
     fn process_general_below_64_bytes_matches_public_api() {
         let data: Vec<u8> = (0..40u32).map(|i| (i * 37 + 5) as u8).collect();
@@ -1377,34 +1365,18 @@ mod tests {
     }
 }
 
-/// Kani proof harnesses for individual encoder kernels.
+/// Kani proof harnesses for individual encoder kernels (`cargo kani`).
 ///
-/// Compiled only under the Kani model checker (`cargo kani`), never by a
-/// normal build or `cargo test`. Run with `cargo kani` or
-/// `cargo kani --harness <name>`; `cargo kani list` shows harness names.
-///
-/// Each harness calls a private kernel function directly with a fixed-size
-/// array input, so the length stays a compile-time constant all the way
-/// through -- unlike going through the public `Engine::encode_into` /
-/// `T: AsRef<[u8]>` entry point, whose trait dispatch was observed to erase
-/// that constant-ness for CBMC and send `write_leading_zeros`'s loop
-/// unwinding without bound. Verifying one kernel at a time like this also
-/// keeps each proof's state space small: a single harness that round-tripped
-/// the whole public pipeline OOM'd.
-///
-/// Scope, for now: encoder only.
+/// Each harness calls a private kernel with a fixed-size array so lengths stay
+/// compile-time constants for CBMC; going through the public `AsRef<[u8]>`
+/// entry point left loops unbounded, and a whole-pipeline harness ran out of
+/// memory.
 #[cfg(kani)]
 mod kani_tests {
     use super::*;
 
-    /// `write_leading_zeros` must report the true leading-zero-byte count of
-    /// its input and have written exactly that many `z_char` bytes at the
-    /// front of `dst` -- for every length from 0 to 64 bytes, and for every
-    /// one of the `2^(8*len)` possible inputs at that length. The backing
-    /// array is a fixed `[u8; 64]`; `len` is a symbolic bound on how much of
-    /// it -- and of `input`'s content -- is actually exercised, so this one
-    /// harness sweeps every length in range rather than checking isolated
-    /// points.
+    /// `write_leading_zeros` returns the leading-zero-byte count and writes
+    /// exactly that many `z_char` bytes, for every input of 0 to 64 bytes.
     #[kani::proof]
     #[kani::unwind(72)]
     fn write_leading_zeros_is_correct_for_all_lengths_0_to_64() {
@@ -1430,11 +1402,8 @@ mod kani_tests {
         }
     }
 
-    /// `process_fixed_32`'s output feeds `write_digits_to_string` through
-    /// `digit_len` and `emit_partial_block`, both of which assume every digit
-    /// is a valid Base 58^10 value (`< 58^10`). This is that assumption,
-    /// proved for every one of the `2^256` possible 32-byte inputs, not just
-    /// the ones a random-sampling test happens to hit.
+    /// Every digit `process_fixed_32` produces is below 58^10, as
+    /// `digit_len` and `emit_partial_block` assume, for all 32-byte inputs.
     #[kani::proof]
     #[kani::unwind(10)]
     fn process_fixed_32_digits_are_in_range() {
@@ -1449,11 +1418,8 @@ mod kani_tests {
         }
     }
 
-    /// `matrix_64`'s carry-select sweep (`sweep_64`) must leave every one of
-    /// the 18 live digits normalized below the radix, and the two padding
-    /// lanes at zero -- the same invariant its own `debug_assert_eq!`s check,
-    /// proved here for every 64-byte input rather than only the ones a
-    /// debug-mode test run happens to cover.
+    /// `matrix_64` leaves all 18 live digits below the radix and the two
+    /// padding columns at zero, for all 64-byte inputs.
     #[kani::proof]
     #[kani::unwind(20)]
     fn matrix_64_digits_are_normalized() {
@@ -1473,10 +1439,7 @@ mod kani_tests {
         }
     }
 
-    /// `digit_len` must return the exact number of Base58 characters `val`
-    /// needs, for every possible `u64`: `POW_58[n-1] <= val < POW_58[n]`,
-    /// with the top class clamped at 10 characters (a Base 58^10 digit is
-    /// always `< 58^10`, `digit_len`'s documented ceiling).
+    /// `digit_len` is exact for every `u64`, clamped at 10 characters.
     #[kani::proof]
     fn digit_len_is_exact_for_all_u64() {
         let val: u64 = kani::any();

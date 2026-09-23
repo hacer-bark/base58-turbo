@@ -37,83 +37,41 @@ fuzz_target!(|data: &[u8]| {
     };
 
     // ----------------------------------------------------------------------
-    // 2. Stress Test: ENCODE
+    // 2. Round trip: the allocating API has no size limit and cannot fail
     // ----------------------------------------------------------------------
-    let encode_result = engine.encode(payload);
+    let encoded_string = engine.encode(payload).unwrap();
+    assert_eq!(
+        engine.decode(&encoded_string).unwrap(),
+        payload,
+        "Round trip mismatch"
+    );
 
-    match encode_result {
-        Ok(encoded_string) => {
-            // [Invariant]: If we got Ok, input MUST be <= 1024
-            assert!(
-                payload.len() <= 1024,
-                "API succeeded on input > 1024 bytes! len={}",
-                payload.len()
+    // The zero-allocation API, within its limits.
+    if payload.len() <= 1024 {
+        let mut buf = vec![0u8; engine.decoded_len(encoded_string.len())];
+        let len = engine.decode_into(&encoded_string, &mut buf).unwrap();
+        assert_eq!(&buf[..len], payload);
+
+        if len > 0 {
+            let mut small_buf = vec![0u8; len - 1];
+            assert_eq!(
+                engine.decode_into(&encoded_string, &mut small_buf),
+                Err(Error::BufferTooSmall)
             );
-
-            // ----------------------------------------------------------------------
-            // 3. Stress Test: ROUND TRIP
-            // ----------------------------------------------------------------------
-            let decode_result = engine.decode(&encoded_string);
-            match decode_result {
-                Ok(decoded_data) => {
-                    assert_eq!(payload, decoded_data.as_slice(), "Round trip mismatch");
-                }
-                Err(e) => {
-                    panic!("Failed to decode valid round-trip data: {:?}", e);
-                }
-            }
-
-            // Test decode_into with exact buffer
-            let max_dec_len = engine.decoded_len(encoded_string.len());
-            let mut buf = vec![0u8; max_dec_len];
-            let len = engine.decode_into(&encoded_string, &mut buf).unwrap();
-            assert_eq!(len, payload.len());
-            assert_eq!(&buf[..len], payload);
-
-            // Test decode_into with too small buffer
-            if len > 0 {
-                let mut small_buf = vec![0u8; len - 1];
-                assert_eq!(
-                    engine.decode_into(&encoded_string, &mut small_buf),
-                    Err(Error::BufferTooSmall)
-                );
-            }
-        }
-        Err(e) => match e {
-            Error::InputTooBig => {
-                assert!(
-                    payload.len() > 1024,
-                    "InputTooBig returned for small input len={}",
-                    payload.len()
-                );
-            }
-            _ => panic!("Unexpected error during encode: {:?}", e),
-        },
-    }
-
-    // ----------------------------------------------------------------------
-    // 4. Stress Test: DECODE RANDOM GARBAGE
-    // ----------------------------------------------------------------------
-    let garbage_result = engine.decode(payload);
-    match garbage_result {
-        Ok(decoded) => {
-            // If it succeeded, round trip it back
-            let _re_encoded = engine.encode(&decoded).unwrap();
-        }
-        Err(e) => {
-            match e {
-                Error::InvalidCharacter => {}
-                Error::InputTooBig => {
-                    // Can happen if string is > 2048 OR if represented value > 1024 bytes
-                }
-                Error::BufferTooSmall => panic!("Allocating API returned BufferTooSmall"),
-                Error::WrongAlphabet => panic!("Decode returned WrongAlphabet"),
-            }
         }
     }
 
     // ----------------------------------------------------------------------
-    // 5. Stress Test: ZERO-ALLOCATION BOUNDS CHECKS
+    // 3. Decode random garbage: valid Base58 is canonical, so it re-encodes exactly
+    // ----------------------------------------------------------------------
+    match engine.decode(payload) {
+        Ok(decoded) => assert_eq!(engine.encode(&decoded).unwrap().as_bytes(), payload),
+        Err(Error::InvalidCharacter) => {}
+        Err(e) => panic!("Allocating decode returned {:?}", e),
+    }
+
+    // ----------------------------------------------------------------------
+    // 4. Zero-allocation bounds checks
     // ----------------------------------------------------------------------
     if !payload.is_empty() && payload.len() <= 1024 {
         let mut tiny_buf = [0u8; 0];
@@ -122,10 +80,6 @@ fuzz_target!(|data: &[u8]| {
 
         let mut tiny_buf = [0u8; 0];
         let res = engine.decode_into(payload, &mut tiny_buf);
-        // decode_into might return InvalidCharacter first if payload is garbage
-        match res {
-            Err(Error::BufferTooSmall) | Err(Error::InvalidCharacter) => {}
-            _ => panic!("Unexpected result for tiny decode buffer: {:?}", res),
-        }
+        assert_eq!(res, Err(Error::BufferTooSmall));
     }
 });
