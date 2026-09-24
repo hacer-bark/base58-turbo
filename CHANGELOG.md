@@ -23,7 +23,13 @@ All notable changes to this project are documented here. The format follows
 ### Changed
 
 - License changed from `MIT OR Apache-2.0` to `0BSD`.
-- Faster scalar encoder and decoder.
+- Faster scalar encoder and decoder. Encoding above 64 bytes gained another
+  10-30% (1 KiB: 51k -> 37k cycles on an i7-8750H).
+- `xmr` converts each 8-byte block directly instead of through the general
+  engine: 4-5x faster encode and decode.
+- **Breaking:** `encode::encode_slice_unbounded` returns `Result<usize, Error>`.
+  It and `encode::encode_slice` now return `Error::BufferTooSmall` for a short
+  destination instead of panicking.
 - `Engine::encode_32_batch` no longer requires the `std` feature.
 - `Error::WrongAlphabet` now displays as "alphabet has a duplicate or non-ASCII
   char", since it also covers non-ASCII alphabets.
@@ -31,6 +37,11 @@ All notable changes to this project are documented here. The format follows
 ### Fixed
 
 - `xmr::encoded_len` was documented as an upper bound; it is exact.
+- On 32-bit targets, `Engine::encoded_len` saturated for inputs over ~31 MB,
+  so `Engine::encode` panicked, and `Engine::decode` overflowed its scratch
+  sizing past ~733 K characters.
+- Builds on the 1.87 MSRV again (a const only used in assertions tripped
+  `dead_code`).
 - Documentation, README benchmark figures, CI jobs, and the fuzz target no longer
   describe the removed `unsafe-simd` feature or the old 1024-byte limit on the
   allocating API.

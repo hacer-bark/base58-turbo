@@ -1,14 +1,12 @@
 //! Low-level Base58 decoding kernel.
 //!
 //! [`decode_slice`] is the zero-allocation primitive behind [`crate::Engine::decode_into`].
-//! Prefer the [`crate::Engine`] methods unless you specifically need this unchecked entry point.
+//! Prefer the [`crate::Engine`] methods unless you need a custom [`Config`].
 //!
-//! Both kernels below read characters through [`crate::Config::lut_58_pow`], which
-//! stores `digit(b) * 58^k` for `k` in 0..4. A group of four characters is then a
-//! plain sum of four table entries: the positional weight is already folded into
-//! the lookup, so the group costs three adds instead of three multiplies, and the
-//! sum doubles as the validity check (see [`crate::BAD_DIGIT`]). Only the
-//! cross-group weights, which are larger than 58^3, are still multiplies.
+//! Characters are read through [`crate::Config::lut_58_pow`], which folds the
+//! positional weight into the lookup: a group of four characters is a plain sum
+//! of four entries, and that sum doubles as the validity check (see
+//! [`crate::BAD_DIGIT`]).
 
 use crate::{BAD_DIGIT, Config, Error};
 
@@ -23,7 +21,7 @@ const P4: u64 = 11_316_496;
 const POW58: [u64; 4] = [1, 58, 3364, 195_112];
 
 /// 58^10, the largest power of 58 below 2^64: ten characters per bignum step.
-const RADIX_58_10: u64 = 430_804_206_899_405_824;
+pub(crate) const RADIX_58_10: u64 = 430_804_206_899_405_824;
 
 // ----------------------------------------------------------------------
 // Scratch Sizing
@@ -39,26 +37,25 @@ const MAX_WORDS: usize = 128;
 const _: () = assert!(MAX_WORDS + 2 <= LARGE_WORDS, "large class too tight");
 
 /// Any bit at or above this one in a group sum means the group held a character
-/// outside the alphabet.
-///
-/// The group-of-four parse sums four `lut_58_pow` entries and tests against this
-/// once, which is only sound while the three assertions below hold.
+/// outside the alphabet. Sound only while the assertions below hold.
 const GROUP_BAD: u32 = 1 << 26;
-/// Largest sum four in-alphabet [`crate::Config::lut_58_pow`] entries can reach.
-const GROUP_MAX: u32 = 4 * 57 * 195_112;
 
-const _: () = assert!(
-    GROUP_MAX < GROUP_BAD,
-    "a valid group must not reach the test bit"
-);
-const _: () = assert!(
-    BAD_DIGIT >= GROUP_BAD,
-    "the sentinel must reach the test bit"
-);
-const _: () = assert!(
-    4 * BAD_DIGIT as u64 + GROUP_MAX as u64 <= u32::MAX as u64,
-    "a group sum must not wrap"
-);
+const _: () = {
+    // Largest sum four in-alphabet `lut_58_pow` entries can reach.
+    let group_max = 4 * 57 * 195_112u64;
+    assert!(
+        group_max < GROUP_BAD as u64,
+        "a valid group must not reach the test bit"
+    );
+    assert!(
+        BAD_DIGIT >= GROUP_BAD,
+        "the sentinel must reach the test bit"
+    );
+    assert!(
+        4 * BAD_DIGIT as u64 + group_max <= u32::MAX as u64,
+        "a group sum must not wrap"
+    );
+};
 
 // ----------------------------------------------------------------------
 // Arithmetic Helpers
@@ -66,9 +63,6 @@ const _: () = assert!(
 
 /// `digits = digits * multiplier + addend` over little-endian u64 words.
 /// Returns false if the result does not fit `digits`.
-///
-/// The `as u64` truncations keep the low half of a 128-bit value whose high half
-/// is carried on.
 #[inline]
 #[allow(clippy::cast_possible_truncation)]
 fn bignum_mul_add(digits: &mut [u64], count: &mut usize, multiplier: u64, addend: u64) -> bool {
@@ -101,51 +95,49 @@ fn bignum_mul_add(digits: &mut [u64], count: &mut usize, multiplier: u64, addend
     true
 }
 
-/// Parses a tail of 1-9 Base58 characters, returning `(value, 58^len)`.
+/// Parses up to 10 Base58 characters, returning `(value, 58^len)`.
+///
+/// Each group is validated before it is multiplied in: an invalid group sum is
+/// up to `2^30`, which would overflow `value` over ten characters.
 #[inline]
-fn parse_chunk(config: &Config, src: &[u8]) -> Result<(u64, u64), Error> {
+pub(crate) fn parse_chunk(config: &Config, src: &[u8]) -> Result<(u64, u64), Error> {
+    debug_assert!(src.len() <= 10);
     let lut = &config.lut_58_pow;
-    let mut bad = 0u32;
     let mut value = 0u64;
     let mut multiplier = 1u64;
 
-    // Groups of four fold to three adds, since the weight is already in the table.
-    let mut rest = src;
-    while rest.len() >= 4 {
-        let group = lut[3][rest[0] as usize]
-            + lut[2][rest[1] as usize]
-            + lut[1][rest[2] as usize]
-            + lut[0][rest[3] as usize];
-        bad |= group;
+    let mut groups = src.chunks_exact(4);
+    for g in groups.by_ref() {
+        let group = lut[3][g[0] as usize]
+            + lut[2][g[1] as usize]
+            + lut[1][g[2] as usize]
+            + lut[0][g[3] as usize];
+        if group >= GROUP_BAD {
+            return Err(Error::InvalidCharacter);
+        }
         value = value * P4 + u64::from(group);
         multiplier *= P4;
-        rest = &rest[4..];
     }
 
+    let rest = groups.remainder();
     let left = rest.len();
     let mut acc = 0u32;
     for (i, &byte) in rest.iter().enumerate() {
         acc += lut[left - 1 - i][byte as usize];
     }
-    bad |= acc;
-    value = value * POW58[left] + u64::from(acc);
-    multiplier *= POW58[left];
-
-    if bad >= GROUP_BAD {
+    if acc >= GROUP_BAD {
         return Err(Error::InvalidCharacter);
     }
 
-    Ok((value, multiplier))
+    Ok((
+        value * POW58[left] + u64::from(acc),
+        multiplier * POW58[left],
+    ))
 }
 
-/// Parses exactly 10 Base58 characters into a single Base 58^10 digit.
-///
-/// The characters are read as two groups of four plus a pair. Because
-/// [`Config::lut_58_pow`] already carries the 58^k factor, a group costs three
-/// adds and no multiply, and the ten table entries validate as a group: see
-/// [`BAD_DIGIT`].
+/// Parses exactly 10 Base58 characters into one Base 58^10 digit.
 #[inline]
-fn parse_chunk_10(config: &Config, src: &[u8; 10]) -> Result<u64, Error> {
+pub(crate) fn parse_chunk_10(config: &Config, src: &[u8; 10]) -> Result<u64, Error> {
     let lut = &config.lut_58_pow;
 
     let g0 = lut[3][src[0] as usize]
@@ -171,9 +163,7 @@ fn parse_chunk_10(config: &Config, src: &[u8; 10]) -> Result<u64, Error> {
 
 /// Accumulates the Base58 payload into `bignum`, returning the live word count.
 ///
-/// `max_words` is an explicit ceiling on the live word count, checked in addition
-/// to `bignum`'s own capacity; callers that want no ceiling beyond `bignum`'s
-/// actual size can pass `bignum.len()`.
+/// `max_words` caps the live word count on top of `bignum`'s own capacity.
 #[inline]
 fn accumulate(
     config: &Config,
@@ -185,7 +175,6 @@ fn accumulate(
 
     let mut chunks = src.chunks_exact(10);
     for chunk in chunks.by_ref() {
-        // `chunks_exact(10)` guarantees every `chunk` is exactly 10 bytes.
         let chunk: &[u8; 10] = chunk.try_into().unwrap_or_else(|_| unreachable!());
         let value = parse_chunk_10(config, chunk)?;
 
@@ -212,27 +201,22 @@ fn accumulate(
     Ok(count)
 }
 
-/// Writes the accumulated bignum out as big-endian bytes, left-aligned in `dst`.
-/// Returns the number of bytes written.
-///
-/// The `val as u8` truncation takes the low byte of a word being shifted out.
+/// Writes the bignum out as big-endian bytes, left-aligned in `dst`, and returns
+/// the number of bytes written.
 #[inline]
 #[allow(clippy::cast_possible_truncation)]
 fn emit(bignum: &[u64], dst: &mut [u8]) -> Result<usize, Error> {
-    // Written backwards from the end of `dst`.
+    // Written backwards from the end of `dst`, then moved to the front.
     let mut out_idx = dst.len();
     let mut i = 0;
 
-    // Whole words, one 8-byte store each. The bounds check is per word rather
-    // than per byte, and only the final word can straddle the buffer start.
     while i < bignum.len() && out_idx >= 8 {
         out_idx -= 8;
         dst[out_idx..out_idx + 8].copy_from_slice(&bignum[i].to_be_bytes());
         i += 1;
     }
 
-    // Fewer than 8 bytes of room left: write what fits, then whatever remains
-    // must be zero or the buffer really is too small.
+    // Under 8 bytes of room: whatever does not fit must be zero.
     if i < bignum.len() {
         let mut val = bignum[i];
         while out_idx > 0 {
@@ -245,8 +229,6 @@ fn emit(bignum: &[u64], dst: &mut [u8]) -> Result<usize, Error> {
         }
     }
 
-    // Strip the zero bytes above the value's top byte; explicit leading zeros
-    // were already written by the caller, ahead of this slice.
     let start = dst[out_idx..]
         .iter()
         .position(|&b| b != 0)
@@ -262,29 +244,14 @@ fn emit(bignum: &[u64], dst: &mut [u8]) -> Result<usize, Error> {
 // Weight-matrix path (short payloads)
 // ----------------------------------------------------------------------
 //
-// `accumulate` is a Horner chain: each `bignum_mul_add` waits on the one
-// before it, so for a short payload the kernel spends most of its time on a
-// dependency chain rather than on work. The alternative is to evaluate the
-// whole radix conversion flat.
+// `accumulate` is a serial Horner chain. For short payloads the conversion is
+// instead evaluated flat: `R` base-58^4 digits times a table of 58^(4e) in base
+// 2^32. A column is at most `R` products of a 24-bit digit by a 32-bit limb, so
+// it fits a u64, and normalizing to base 2^32 needs no division.
 //
-// Group the characters into `R` digits of four, each below 58^4 < 2^24, and
-// give digit `r` the weight 58^(4*(R-1-r)) written out in base 2^32. The value
-// is then a single sum:
-//
-//     value = sum_r d_r * 58^(4*(R-1-r))
-//
-// Column `j` takes at most `R` products of a 24-bit digit by a 32-bit limb, so
-// it peaks at 24+32+log2(R) bits and fits a u64 with room to spare. Because the
-// output radix is 2^32, normalizing the columns is carry-and-shift — decode
-// never divides, which is the one place it has an easier job than encode.
-//
-// The weights are triangular (58^0 fills one limb, 58^20 fills four), and LLVM
-// folds the zero entries away because the table is a constant.
-//
-// In isolation this beats the Horner loop out to about 40 characters, but more
-// arms made `decode_payload` too big to inline well: through the public API, 24
-// is the measured sweet spot (i7-8750H). Outlining the dispatch was slower still.
-// Re-measure before moving `MAT_MAX_CHARS`.
+// 24 characters is the measured sweet spot through the public API (i7-8750H):
+// more arms made `decode_payload` too big to inline well. Re-measure before
+// moving `MAT_MAX_CHARS`.
 
 /// Longest payload, in characters, handled by the matrix path.
 const MAT_MAX_CHARS: usize = 24;
@@ -293,10 +260,8 @@ const MAT_MAXE: usize = 6;
 /// Base-2^32 limbs in the widest value, 58^24 - 1.
 const MAT_MAXL: usize = 5;
 
-/// 58^(4e) in base 2^32, little-endian, for e = 0..`MAT_MAXE`.
-///
-/// Keyed by exponent rather than by `(R, row)` so every length shares one table
-/// instead of monomorphizing its own copy.
+/// 58^(4e) in base 2^32, little-endian, for e = 0..`MAT_MAXE`; shared by every
+/// length.
 #[allow(clippy::cast_possible_truncation)]
 const fn mat_weights() -> [[u32; MAT_MAXL]; MAT_MAXE] {
     let mut table = [[0u32; MAT_MAXL]; MAT_MAXE];
@@ -325,10 +290,8 @@ const fn mat_weights() -> [[u32; MAT_MAXL]; MAT_MAXE] {
 
 static MAT_W: [[u32; MAT_MAXL]; MAT_MAXE] = mat_weights();
 
-/// Parses `C` characters into `R` base-58^4 digits, left-padded.
-///
-/// Only the first group can be partial. Group sums are OR-ed and validated once
-/// at the end.
+/// Parses `C` characters into `R` base-58^4 digits; only the first group can be
+/// partial.
 #[inline]
 fn mat_parse<const C: usize, const R: usize>(
     config: &Config,
@@ -379,8 +342,7 @@ fn mat_multiply<const R: usize, const L: usize>(d: &[u32; R]) -> [u32; MAT_MAXL]
         }
     }
 
-    // Every column is under 2^60 and every carry under 2^28, so one pass is
-    // enough: no second sweep, and nothing to divide by.
+    // Columns are under 2^60, so one carry pass suffices.
     let mut limb = [0u32; MAT_MAXL];
     let mut carry = 0u64;
     for (slot, &col) in limb[..L].iter_mut().zip(acc[..L].iter()) {
@@ -394,10 +356,8 @@ fn mat_multiply<const R: usize, const L: usize>(d: &[u32; R]) -> [u32; MAT_MAXL]
 
 /// Writes `limb` (little-endian base 2^32) into `dst` as big-endian bytes.
 ///
-/// `NBMIN` is the shortest output any valid payload of this character count can
-/// produce. Since 58 < 256 the longest is `NBMIN + 1`, so both likely copies
-/// are constant-size. The general arm only serves a payload that still has
-/// leading zero characters.
+/// `NBMIN` is the shortest output for this character count and the longest is
+/// `NBMIN + 1`, so both likely copies are constant-size.
 #[inline]
 fn mat_emit<const L: usize, const NBMIN: usize>(
     limb: &[u32; MAT_MAXL],
@@ -438,11 +398,8 @@ fn mat_run<const C: usize, const R: usize, const L: usize, const NBMIN: usize>(
     mat_emit::<L, NBMIN>(&limb, dst)
 }
 
-/// Dispatches to a monomorphized kernel per character count.
-///
-/// The trip counts have to be compile-time for LLVM to unroll and to fold the
-/// triangular zeros; passing `R` and `L` as runtime values measured about twice
-/// as slow on the encode side of this crate.
+/// Dispatches to a monomorphized kernel per character count, so LLVM unrolls it
+/// and folds the table's zeros.
 macro_rules! mat_dispatch {
     ($cfg:expr, $src:expr, $dst:expr, $n:expr,
      $( ($C:literal, $R:literal, $L:literal, $NB:literal) ),* $(,)?) => {
@@ -489,8 +446,7 @@ fn decode_payload(config: &Config, src: &[u8], dst: &mut [u8]) -> Result<usize, 
         );
     }
 
-    // Scratch sized for the length class, so the zeroing cost stays proportional
-    // to the work being done.
+    // Scratch sized per length class, so zeroing stays proportional.
     match src.len() {
         n if n <= 64 => {
             let mut bignum = [0u64; SMALL_WORDS];
@@ -513,12 +469,10 @@ fn decode_payload(config: &Config, src: &[u8], dst: &mut [u8]) -> Result<usize, 
 /// Counts the leading `zero_char` run in `input`, without writing anything.
 #[inline]
 fn count_leading_zeros(input: &[u8], zero_char: u8) -> usize {
-    // Eight bytes at a time against a splatted zero character, then byte-wise.
     let z_pattern = 0x0101_0101_0101_0101_u64 * u64::from(zero_char);
 
     let mut leading_zeros = 0;
     while input.len() - leading_zeros >= 8 {
-        // The `>= 8` guard above guarantees this 8-byte slice always exists.
         let word_bytes: [u8; 8] = input[leading_zeros..leading_zeros + 8]
             .try_into()
             .unwrap_or_else(|_| unreachable!());
@@ -540,11 +494,10 @@ fn count_leading_zeros(input: &[u8], zero_char: u8) -> usize {
 
 /// Decodes `input` into `dst`, returning the number of bytes written.
 ///
-/// This is the zero-allocation kernel behind [`crate::Engine::decode_into`]; unlike
-/// that method it does not check `dst` is large enough up front, relying instead on
-/// [`Error::BufferTooSmall`] from the underlying write. Capped at a 2048-byte input
-/// (1024-byte decoded output) so its scratch can live on the stack; larger inputs
-/// go through [`crate::Engine::decode`], which falls back to heap scratch.
+/// This is the zero-allocation kernel behind [`crate::Engine::decode_into`]. Unlike
+/// that method it accepts any `dst` that fits the actual output. Capped at a
+/// 2048-byte input (1024-byte output) so its scratch can live on the stack; larger
+/// inputs go through [`decode_slice_unbounded`].
 ///
 /// # Errors
 ///
@@ -611,9 +564,8 @@ pub fn decode_slice_unbounded(
         return Ok(leading_zeros);
     }
 
-    // Scratch sized generously for `src.len()`; mirrors the `LARGE_WORDS` formula,
-    // scaled up instead of capped.
-    let word_budget = (src.len() * 5859).div_ceil(1000).div_ceil(64) + 2;
+    // Each 10-character step multiplies by 58^10 < 2^64, adding at most one word.
+    let word_budget = src.len() / 10 + 2;
     let mut bignum = vec![0u64; word_budget];
     let count = accumulate(config, src, &mut bignum, word_budget)?;
     let written_payload = emit(&bignum[..count], &mut dst[leading_zeros..])?;
@@ -667,16 +619,12 @@ mod tests {
         assert_eq!(count, 1, "count must not advance on failure");
     }
 
-    /// `mat_weights` backs the `MAT_W` static, which is normally only evaluated
-    /// at compile time; call it directly so its body runs at runtime too.
     #[test]
     fn mat_weights_matches_static_table() {
         assert_eq!(mat_weights(), MAT_W);
     }
 
-    /// Drives all four of `accumulate`'s `InputTooBig` returns with undersized
-    /// scratch or a tight `max_words`; the capacity ones are unreachable through
-    /// the public API.
+    /// All four `InputTooBig` returns; the capacity ones are unreachable publicly.
     #[test]
     fn accumulate_rejects_overflow_at_every_check() {
         let config = BITCOIN.config();
@@ -713,9 +661,6 @@ mod tests {
         );
     }
 
-    /// `emit`'s final-word `BufferTooSmall` branch needs a bignum whose top
-    /// word is nonzero but does not fit in the room left after whole words are
-    /// written; the public decode path never leaves that little slack.
     #[test]
     fn emit_rejects_buffer_too_small_on_partial_final_word() {
         let bignum = [0x0102_0304_0506_0708u64, 1];
@@ -723,9 +668,7 @@ mod tests {
         assert_eq!(emit(&bignum, &mut dst), Err(Error::BufferTooSmall));
     }
 
-    /// `mat_emit`'s general length branch is unreachable from `decode_payload`,
-    /// which strips leading zero characters first; call it with a mismatched
-    /// `NBMIN`.
+    /// Unreachable from `decode_payload`, which strips leading zeros first.
     #[test]
     fn mat_emit_general_length_branch() {
         let limb = [0xFFFF_FFFFu32, 0, 0, 0, 0];
@@ -735,8 +678,6 @@ mod tests {
         assert_eq!(dst[..4], [0xFF, 0xFF, 0xFF, 0xFF]);
     }
 
-    /// `decode_slice`'s oversized-input guard is shadowed by
-    /// `Engine::decode_into`'s own check; call the kernel directly.
     #[test]
     fn decode_slice_rejects_oversized_input_directly() {
         let mut dst = [0u8; 4096];
@@ -746,8 +687,6 @@ mod tests {
         );
     }
 
-    /// `decode_slice`'s leading-zero `BufferTooSmall` guard, isolated from
-    /// `Engine::decode_into`'s earlier buffer check.
     #[test]
     fn decode_slice_rejects_buffer_too_small_for_leading_zeros() {
         let mut dst = [0u8; 2];
@@ -757,8 +696,7 @@ mod tests {
         );
     }
 
-    /// `decode_slice`'s `total_len > 1024` guard: the payload fits `MAX_WORDS`,
-    /// but the leading zeros push the total past 1024 bytes.
+    /// The payload fits `MAX_WORDS`, but the leading zeros push it past 1024 bytes.
     #[test]
     fn decode_slice_rejects_total_length_over_1024_bytes() {
         let text = "1".repeat(50) + &"z".repeat(1380);
@@ -781,9 +719,6 @@ mod tests {
         );
     }
 
-    /// `decode_slice_unbounded`'s `BufferTooSmall` guard never fires through
-    /// `Engine::decode`, which always sizes `dst` to at least the input length;
-    /// call the kernel directly with a deliberately undersized buffer.
     #[test]
     #[cfg(feature = "std")]
     fn decode_slice_unbounded_rejects_buffer_too_small() {
@@ -794,11 +729,15 @@ mod tests {
         );
     }
 
+    /// Runs in debug too, where multiplying unvalidated groups in would overflow.
     #[test]
-    fn test_parse_chunk_invalid() {
-        let config = BITCOIN.config();
-        let res = parse_chunk(config, b"10"); // '0' is invalid
-        assert!(res.is_err());
+    fn parse_chunk_rejects_invalid_at_every_length() {
+        for len in 1..=10 {
+            assert!(
+                parse_chunk(BITCOIN.config(), &[b'0'; 10][..len]).is_err(),
+                "len {len}"
+            );
+        }
     }
 
     #[test]

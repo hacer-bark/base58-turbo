@@ -337,7 +337,7 @@ impl Engine {
     #[inline]
     #[must_use]
     pub const fn encoded_len(&self, input_len: usize) -> usize {
-        (input_len.saturating_mul(137) / 100).saturating_add(1)
+        encode::encoded_len(input_len)
     }
 
     /// Returns an upper bound on the decoded length: the input length, since each
@@ -361,20 +361,7 @@ impl Engine {
     /// [`Error::BufferTooSmall`] if `output` is not large enough.
     #[inline]
     pub fn encode_into<T: AsRef<[u8]>>(&self, input: T, output: &mut [u8]) -> Result<usize, Error> {
-        let input = input.as_ref();
-        if input.is_empty() {
-            return Ok(0);
-        }
-        if input.len() > 1024 {
-            return Err(Error::InputTooBig);
-        }
-
-        let req_len = self.encoded_len(input.len());
-        if output.len() < req_len {
-            return Err(Error::BufferTooSmall);
-        }
-
-        encode_slice(input, output, &self.config)
+        encode_slice(input.as_ref(), output, &self.config)
     }
 
     /// Decodes `input` into the `output` buffer.
@@ -429,15 +416,13 @@ impl Engine {
         let max_len = self.encoded_len(input.len());
         let mut out = vec![0u8; max_len];
 
-        let actual_len = match self.encode_into(input, &mut out) {
-            Ok(n) => n,
-            Err(Error::InputTooBig) => encode_slice_unbounded(input, &mut out, &self.config),
-            Err(e) => return Err(e),
+        let actual_len = match encode_slice(input, &mut out, &self.config) {
+            Err(Error::InputTooBig) => encode_slice_unbounded(input, &mut out, &self.config)?,
+            result => result?,
         };
         out.truncate(actual_len);
 
-        // `Config::new` rejects non-ASCII alphabets, so the output is ASCII and
-        // this conversion always succeeds; the error path is unreachable.
+        // Always ASCII: `Config::new` rejects non-ASCII alphabets.
         String::from_utf8(out).map_err(|_| Error::WrongAlphabet)
     }
 
@@ -463,9 +448,8 @@ impl Engine {
         let mut out = vec![0u8; max_len];
 
         let actual_len = match self.decode_into(input, &mut out) {
-            Ok(n) => n,
             Err(Error::InputTooBig) => decode_slice_unbounded(input, &mut out, &self.config)?,
-            Err(e) => return Err(e),
+            result => result?,
         };
         out.truncate(actual_len);
         Ok(out)

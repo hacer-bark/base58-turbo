@@ -35,10 +35,10 @@ fn test_xmr_chunking() {
     }
 }
 
+/// Every length from 0 to 128 bytes covers each block remainder many times over.
 #[test]
 fn test_vs_base58_monero_random() {
-    // Cover every block remainder (0..8) and a couple of full addresses.
-    for len in (0..200).step_by(3) {
+    for len in 0..=128 {
         let input = rng().random_iter::<u8>().take(len).collect::<Vec<_>>();
 
         let expected = base58::encode(&input).unwrap();
@@ -50,13 +50,27 @@ fn test_vs_base58_monero_random() {
     }
 }
 
-/// Every input length from 0 to 128 bytes, with fresh random data every run.
+/// Random strings, most of them not valid encodings: blocks that overflow their
+/// byte width, out-of-alphabet characters, and invalid lengths must all be
+/// rejected exactly when `base58-monero` rejects them.
 #[test]
-fn test_roundtrip_every_length_0_to_128_random() {
-    for len in 0..=128 {
-        let input = rng().random_iter::<u8>().take(len).collect::<Vec<_>>();
-        let encoded = xmr::encode(&input).unwrap();
-        let decoded = xmr::decode(&encoded).unwrap();
-        assert_eq!(input, decoded, "xmr mismatch at len {len}");
+fn test_decode_arbitrary_strings_matches_base58_monero() {
+    const ALPHABET: &[u8] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+    let mut rng = rng();
+    for _ in 0..20_000 {
+        let len = rng.random_range(0..=34);
+        let high = rng.random_range(1..=ALPHABET.len());
+        let text: String = (0..len)
+            .map(|_| {
+                if rng.random_ratio(1, 200) {
+                    '0'
+                } else {
+                    char::from(ALPHABET[rng.random_range(0..high)])
+                }
+            })
+            .collect();
+
+        let expected = base58::decode(&text).ok();
+        assert_eq!(xmr::decode(&text).ok(), expected, "input {text:?}");
     }
 }

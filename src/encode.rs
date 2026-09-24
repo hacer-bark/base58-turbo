@@ -1,7 +1,7 @@
 //! Low-level Base58 encoding kernel.
 //!
 //! [`encode_slice`] is the zero-allocation primitive behind [`crate::Engine::encode_into`].
-//! Prefer the [`crate::Engine`] methods unless you specifically need this unchecked entry point.
+//! Prefer the [`crate::Engine`] methods unless you need a custom [`Config`].
 
 use crate::{Config, Error};
 
@@ -19,11 +19,8 @@ const RADIX_58_5: u64 = 656_356_768;
 // Table Generation
 // ----------------------------------------------------------------------
 
-/// Computes weights for converting Base 2^32 chunks into Base 58^5 digits.
-/// Result: `table[i][k]` = coefficient for `input_chunk[i]` contributing to `output_digit[k]`.
-///
-/// Each `as u32` below is a Base 58^5 remainder, which is always below
-/// `RADIX_58_5 < 2^32` by construction.
+/// Weights converting big-endian u32 words into big-endian Base 58^5 digits:
+/// `table[i][k]` is word `i`'s contribution to digit `k`.
 #[allow(clippy::cast_possible_truncation)]
 const fn generate_weights<const INPUTS: usize, const OUTPUTS: usize>() -> [[u32; OUTPUTS]; INPUTS] {
     let mut table = [[0u32; OUTPUTS]; INPUTS];
@@ -34,14 +31,12 @@ const fn generate_weights<const INPUTS: usize, const OUTPUTS: usize>() -> [[u32;
     while i < INPUTS {
         let row_idx = INPUTS - 1 - i;
 
-        // Copy current power (val) to table row
         let mut k = 0;
         while k < OUTPUTS {
             table[row_idx][k] = val[k];
             k += 1;
         }
 
-        // The inner conversion loop
         let mut temp_val = val;
         let mut col_idx = OUTPUTS;
         while col_idx > 0 {
@@ -57,7 +52,7 @@ const fn generate_weights<const INPUTS: usize, const OUTPUTS: usize>() -> [[u32;
             table[row_idx][col_idx] = rem as u32;
         }
 
-        // Prepare for next iteration: val = val * 2^32 (Logical Left Shift 32 bits)
+        // val *= 2^32
         let mut j = 23;
         while j > 0 {
             val[j] = val[j - 1];
@@ -70,16 +65,11 @@ const fn generate_weights<const INPUTS: usize, const OUTPUTS: usize>() -> [[u32;
     table
 }
 
-/// Computes 2^512 as a little-endian Base 58^5 bignum.
-///
-/// 58^5 is just under 2^29.3, so 2^512 needs 18 digits (17 would only reach 2^498).
-///
-/// `current / RADIX_58_5` fits `u32` because `current < 2^32 * RADIX_58_5`, and
-/// `rem` is a remainder of division by `RADIX_58_5 < 2^32`.
+/// 2^512 as a little-endian Base 58^5 bignum: 18 digits, since 58^5 < 2^29.3.
 #[allow(clippy::cast_possible_truncation)]
 const fn pow2_512_base_58_5() -> [u32; 18] {
     let mut val = [0u32; 24];
-    val[16] = 1; // 2^(32*16)
+    val[16] = 1;
 
     let mut out = [0u32; 18];
     let mut c = 0;
@@ -113,16 +103,14 @@ const POW_58: [u64; 10] = {
     table
 };
 
-/// Limb count at which column-major (Comba) accumulation starts beating row-major.
-const COMBA_MIN_LIMBS: usize = 96;
+/// Limb count from which column-major (Comba) accumulation beats row-major.
+const COMBA_MIN_LIMBS: usize = 32;
 
 /// 2^512, the per-block multiplier for the 64-byte Horner loop.
 const P_512: [u32; 18] = pow2_512_base_58_5();
 
-// 32 bytes -> 8 input chunks (8x u32) -> 8 output digits
 const TABLE_32: [[u32; 8]; 8] = generate_weights::<8, 8>();
 
-// 64 bytes -> 16 input chunks -> 18 output digits
 const TABLE_64: [[u32; 18]; 16] = generate_weights::<16, 18>();
 
 /// Accumulator lanes for the 64-byte kernel, and the zero columns that pad
@@ -130,14 +118,9 @@ const TABLE_64: [[u32; 18]; 16] = generate_weights::<16, 18>();
 const LANES: usize = 5;
 const G_PAD: usize = LANES * 4 - 18;
 
-/// [`TABLE_64`] regrouped row-major, four weights to a lane.
-///
-/// The kernel accumulates one input word against a whole row at a time, so the
-/// weights a step touches have to be adjacent; the two zero columns at the
-/// front round each row out to five 4-wide lanes, which is what lets the
-/// multiply-add lower to `vpmuludq` with the accumulators living in registers
-/// across all sixteen rows. Column `k` of [`TABLE_64`] sits at flat index
-/// `G_PAD + k`.
+/// [`TABLE_64`] regrouped into 4-wide lanes, with column `k` at flat index
+/// `G_PAD + k`. The leading zero columns keep each row a whole number of lanes,
+/// so the multiply-add vectorizes with the accumulators held in registers.
 const TABLE_64_G: [[[u32; 4]; LANES]; 16] = {
     let mut t = [[[0u32; 4]; LANES]; 16];
     let mut i = 0;
@@ -159,6 +142,7 @@ const MINI: usize = G_PAD + 16;
 const SWEEP_CUTS: [usize; 2] = [G_PAD + 6, G_PAD + 12];
 
 /// Limb budget per length class for the general kernel, which runs above 64 bytes.
+const SMALL_LIMBS: usize = 40; // <= 128 bytes -> 38 limbs
 const MEDIUM_LIMBS: usize = 96; // <= 320 bytes -> 88 limbs
 const LARGE_LIMBS: usize = 288; // <= 1024 bytes -> 280 limbs
 
@@ -166,11 +150,6 @@ const LARGE_LIMBS: usize = 288; // <= 1024 bytes -> 280 limbs
 // Memory Helpers
 // ----------------------------------------------------------------------
 
-/// Big-endian u32 load from the front of a slice.
-///
-/// # Panics
-///
-/// Panics if `src` has fewer than 4 bytes.
 #[inline]
 fn load_be_u32(src: &[u8]) -> u32 {
     let mut bytes = [0u8; 4];
@@ -182,11 +161,8 @@ fn load_be_u32(src: &[u8]) -> u32 {
 // Emission Helpers
 // ----------------------------------------------------------------------
 
-/// Number of Base58 characters needed to write `val`, which is a Base 58^10 digit
-/// and so always below 58^10.
-///
-/// A balanced search over the ten possible answers: four compares against constants,
-/// versus up to ten serial divisions for the equivalent divide-until-zero loop.
+/// Number of Base58 characters needed to write `val < 58^10`, as a balanced
+/// compare tree rather than a divide-until-zero loop.
 #[inline]
 const fn digit_len(val: u64) -> usize {
     if val < POW_58[5] {
@@ -210,13 +186,9 @@ const fn digit_len(val: u64) -> usize {
     }
 }
 
-/// Emits exactly 10 characters for a full `u64` digit (Base 58^10).
-///
-/// Taking the destination as a fixed-size array makes every write a constant index,
-/// so the whole body is bounds-check free.
+/// Emits exactly 10 characters for a Base 58^10 digit.
 #[inline]
-fn emit_full_block(config: &Config, mut val: u64, out: &mut [u8; 10]) {
-    // Split into three groups: 2 high chars, then two groups of 4.
+pub(crate) fn emit_full_block(config: &Config, mut val: u64, out: &mut [u8; 10]) {
     let low = (val % RADIX_58_4) as usize;
     val /= RADIX_58_4;
     let mid = (val % RADIX_58_4) as usize;
@@ -232,10 +204,9 @@ fn emit_full_block(config: &Config, mut val: u64, out: &mut [u8; 10]) {
 
 /// Emits the 1 to 10 characters of the most significant digit, filling `out` exactly.
 #[inline]
-fn emit_partial_block(config: &Config, mut val: u64, out: &mut [u8]) {
+pub(crate) fn emit_partial_block(config: &Config, mut val: u64, out: &mut [u8]) {
     let mut n = out.len();
 
-    // Four at a time while there is room, using the squared lookup table.
     while n >= 4 {
         let rem = val % RADIX_58_4;
         val /= RADIX_58_4;
@@ -255,10 +226,8 @@ fn emit_partial_block(config: &Config, mut val: u64, out: &mut [u8]) {
     }
 }
 
-/// Writes the bignum digits into `dst` and returns the number of bytes written.
-///
-/// `digits` is little-endian Base 58^10, so `digits[0]` lands at the far right of
-/// the output and the most significant digit supplies the leading, short chunk.
+/// Writes little-endian Base 58^10 `digits` into `dst`, returning the length.
+/// Only the most significant digit is written short.
 #[inline]
 fn write_digits_to_string(config: &Config, digits: &[u64], dst: &mut [u8]) -> usize {
     let Some((&msb, rest)) = digits.split_last() else {
@@ -270,10 +239,7 @@ fn write_digits_to_string(config: &Config, digits: &[u64], dst: &mut [u8]) -> us
 
     let (head, body) = dst[..total_len].split_at_mut(last_chunk_len);
 
-    // `rchunks_exact_mut` walks right to left, matching the little-endian digits.
-    // Each window is exactly 10 bytes, so it converts to an array reference for free.
     for (window, &digit) in body.rchunks_exact_mut(10).zip(rest) {
-        // `rchunks_exact_mut(10)` guarantees every `window` is exactly 10 bytes.
         let arr: &mut [u8; 10] = window.try_into().unwrap_or_else(|_| unreachable!());
         emit_full_block(config, digit, arr);
     }
@@ -286,20 +252,14 @@ fn write_digits_to_string(config: &Config, digits: &[u64], dst: &mut [u8]) -> us
 // Arithmetic Kernels (Fixed Size)
 // ----------------------------------------------------------------------
 
-/// Optimized kernel for 32 bytes.
-///
-/// The `as u64` truncations in the reduction step are remainders/quotients of
-/// division by `RADIX_58_5 < 2^32`, so they always fit `u64`.
 #[inline]
 #[allow(clippy::cast_possible_truncation)]
 fn process_fixed_32(src: &[u8; 32], out_digits: &mut [u64; 5]) -> usize {
-    // 1. Read Inputs (8x u32)
     let mut input = [0u32; 8];
     for (slot, chunk) in input.iter_mut().zip(src.chunks_exact(4)) {
         *slot = load_be_u32(chunk);
     }
 
-    // 2. Matrix Multiplication
     let mut digits_5 = [0u128; 9];
     for (k, slot) in digits_5[1..].iter_mut().enumerate() {
         let mut sum = 0u128;
@@ -309,7 +269,6 @@ fn process_fixed_32(src: &[u8; 32], out_digits: &mut [u64; 5]) -> usize {
         *slot = sum;
     }
 
-    // 3. Reduction
     let mut carry = 0u64;
     let mut final_5 = [0u64; 9];
     let radix = u128::from(RADIX_58_5);
@@ -320,7 +279,6 @@ fn process_fixed_32(src: &[u8; 32], out_digits: &mut [u64; 5]) -> usize {
     }
     final_5[0] = digits_5[0] as u64 + carry;
 
-    // 4. Pack into Base 58^10
     out_digits[0] = final_5[7] * RADIX_58_5 + final_5[8];
     out_digits[1] = final_5[5] * RADIX_58_5 + final_5[6];
     out_digits[2] = final_5[3] * RADIX_58_5 + final_5[4];
@@ -330,21 +288,12 @@ fn process_fixed_32(src: &[u8; 32], out_digits: &mut [u64; 5]) -> usize {
     if out_digits[4] > 0 { 5 } else { 4 }
 }
 
-/// Converts 64 bytes into 18 big-endian Base 58^5 digits, four to a lane.
+/// Converts 64 bytes into 18 normalized big-endian Base 58^5 digits, laid out
+/// as in [`TABLE_64_G`].
 ///
-/// Column `k` of the result is at flat index `G_PAD + k`; the padding columns
-/// stay zero because their weights are.
-///
-/// Accumulation is row-major -- one input word against one whole table row --
-/// so the inner step walks 4 adjacent weights and LLVM keeps all five
-/// accumulator lanes in registers. Column-major strides the table by a row per
-/// step, which lowers to gathers and costs about 4x.
-///
-/// Only column 16 can overflow a u64 over all sixteen rows (the rest peak at
-/// 2^63.75), so the batches are split there and only that one column is
-/// reduced in between. Afterwards column 16 is below the radix and column 15
-/// has grown by at most `2^64 / 58^5`, so neither can overflow on the second
-/// batch.
+/// Row-major on purpose: column-major lowers to gathers, about 4x slower. Only
+/// column [`MINI`] can overflow a u64 across all sixteen rows (the rest peak at
+/// 2^63.75), so it alone is reduced between the two halves.
 #[inline]
 fn matrix_64(src: &[u8; 64]) -> [[u64; 4]; LANES] {
     let mut input = [0u32; 16];
@@ -354,8 +303,7 @@ fn matrix_64(src: &[u8; 64]) -> [[u64; 4]; LANES] {
 
     let mut acc = [[0u64; 4]; LANES];
 
-    // Written as an indexed loop on purpose: iterating the rows by slice
-    // iterator stops LLVM unrolling this and it falls back to gathers.
+    // Indexed on purpose: a slice iterator here stops the unroll.
     for i in 0..8 {
         let x = u64::from(input[i]);
         let row = &TABLE_64_G[i];
@@ -366,7 +314,6 @@ fn matrix_64(src: &[u8; 64]) -> [[u64; 4]; LANES] {
         }
     }
 
-    // Mini-reduction of the single at-risk column.
     acc[(MINI - 1) / 4][(MINI - 1) % 4] += acc[MINI / 4][MINI % 4] / RADIX_58_5;
     acc[MINI / 4][MINI % 4] %= RADIX_58_5;
 
@@ -396,8 +343,7 @@ fn chain(flat: &mut [u64], from: usize, to: usize, carry_in: u64) -> u64 {
     carry
 }
 
-/// Adds `carry` into an already-normalized `flat[from..to]`, returning what is
-/// left over. Every digit is below the radix, so this normally stops at once.
+/// Adds `carry` into an already-normalized `flat[from..to]`, returning the rest.
 #[inline]
 fn fold(flat: &mut [u64], from: usize, to: usize, mut carry: u64) -> u64 {
     for k in (from..to).rev() {
@@ -411,22 +357,15 @@ fn fold(flat: &mut [u64], from: usize, to: usize, mut carry: u64) -> u64 {
     carry
 }
 
-/// Carry-normalizes the 18 digits, splitting the chain into three.
-///
-/// One divmod's quotient feeds the next, so a straight sweep is 18 serial
-/// multiply-highs, and that chain -- not the multiply -- is what the 64-byte
-/// kernel spends most of its time on. Cutting it into three independent
-/// six-digit chains lets them overlap, at the price of folding each carry-out
-/// into the chain above it afterwards. Those folds are cheap: every digit is
-/// already below the radix by then, so the loop almost always stops on the
-/// first one.
+/// Carry-normalizes the 18 digits as three independent chains, then folds each
+/// carry-out into the (already normalized) chain above. A single 18-step divide
+/// chain is what the 64-byte kernel would otherwise spend most of its time on.
 #[inline]
 fn sweep_64(acc: &mut [[u64; 4]; LANES]) {
     let flat = acc.as_flattened_mut();
 
     let [cut_lo, cut_hi] = SWEEP_CUTS;
 
-    // Three independent chains, bottom to top.
     let carry_lo = chain(flat, cut_hi, LANES * 4, 0);
     let carry_mid = chain(flat, cut_lo, cut_hi, 0);
     let carry_hi = chain(flat, G_PAD, cut_lo, 0);
@@ -437,10 +376,6 @@ fn sweep_64(acc: &mut [[u64; 4]; LANES]) {
     debug_assert_eq!(carry, 0, "the top digit absorbs the final carry");
 }
 
-/// Encodes 32 bytes.
-///
-/// `src` never starts with a zero byte here: [`encode_slice`] strips the leading
-/// zero run before dispatching.
 #[inline]
 fn encode_fixed_32(src: &[u8; 32], dst: &mut [u8], config: &Config) -> usize {
     let mut digits = [0u64; 5];
@@ -448,18 +383,14 @@ fn encode_fixed_32(src: &[u8; 32], dst: &mut [u8], config: &Config) -> usize {
     write_digits_to_string(config, &digits[..n], dst)
 }
 
-/// Encodes 64 bytes.
-///
-/// 58^90 exceeds 2^512, so 18 Base 58^5 digits always suffice and the pairing
-/// into Base 58^10 is at most 9 digits. A true 64-byte input always fills all
-/// nine, but the 57-to-63-byte dispatch feeds this a zero-extended shorter
-/// value, so the leading zero digits still have to be trimmed.
+/// Encodes 64 bytes, or a shorter input zero-extended to 64, so the leading zero
+/// digits still need trimming.
 #[inline]
 fn encode_fixed_64(src: &[u8; 64], dst: &mut [u8], config: &Config) -> usize {
     let acc = matrix_64(src);
     let digits = acc.as_flattened();
 
-    // Pack into Base 58^10. `digits` is big-endian, `out_digits` little-endian.
+    // Big-endian Base 58^5 -> little-endian Base 58^10.
     let mut out_digits = [0u64; 9];
     for (i, slot) in out_digits.iter_mut().enumerate() {
         let k = MINI - 2 * i;
@@ -478,31 +409,17 @@ fn encode_fixed_64(src: &[u8; 64], dst: &mut [u8], config: &Config) -> usize {
 // Small-Input Matrix Kernel (<= 56 bytes)
 // ----------------------------------------------------------------------
 //
-// Gives every other length up to 56 bytes the fixed-kernel treatment: compile-time
-// trip counts, so the dot products unroll and vectorize, instead of the general
-// kernel's serial Horner divisions. The input is right-aligned into the low
-// word-rows of `TABLE_64`, so one table serves all widths, and W is a const
-// generic so each length class monomorphizes into its own unrolled body.
+// The input is right-aligned into the low rows of `TABLE_64`, and `W` is a const
+// generic, so each width gets its own fully unrolled dot product instead of the
+// general kernel's serial divisions.
 
-/// Digit count per width, **rounded up to a multiple of four**.
-///
-/// The rounding is not padding for its own sake. The dot product runs one
-/// column at a time over four adjacent weights, so a digit count that is not a
-/// whole number of 4-wide lanes leaves a scalar remainder, measured 1.7x slower
-/// at W = 12 (14 digits vs 16). The extra columns are provably zero (see `sub_table_drops_only_zero_columns`),
-/// so they cost `W` multiply-adds and a couple of sweep limbs and buy back a
-/// clean trip count. `digits_for_w_is_lane_aligned_and_sufficient` checks this table,
-/// and the dispatch literals below have to match it.
+/// Digit count per width, rounded up to whole 4-wide lanes: a scalar remainder
+/// measured 1.7x slower at W = 12. The dispatch literals must match this table.
 #[cfg(test)]
 const DIGITS_FOR_W: [usize; 15] = [0, 4, 4, 4, 8, 8, 8, 8, 12, 12, 12, 16, 16, 16, 16];
 
-/// The bottom-right `W x D` corner of [`TABLE_64`]: rows for the low `W` input
-/// words, columns for the low `D` digits.
-///
-/// Dropping the high columns is exact, not an approximation: a row for word `i`
-/// carries the weight `2^(32*i) < 2^(32*W)`, which needs at most `D` digits, so
-/// every entry above them is zero; `sub_table_drops_only_zero_columns` checks
-/// every width the dispatch uses.
+/// The bottom-right `W x D` corner of [`TABLE_64`]. The dropped columns are all
+/// zero, since `2^(32*W)` needs at most `D` digits.
 const fn sub_table<const W: usize, const D: usize>() -> [[u32; D]; W] {
     let mut t = [[0u32; D]; W];
     let mut r = 0;
@@ -517,18 +434,16 @@ const fn sub_table<const W: usize, const D: usize>() -> [[u32; D]; W] {
     t
 }
 
-/// Carrier for the per-`(W, D)` sub-table. An item inside a function body cannot
-/// see that function's generic parameters, so the table hangs off a generic impl.
+/// Carrier for the per-`(W, D)` sub-table, since a fn-local item cannot use the
+/// fn's generics.
 struct Tab<const W: usize, const D: usize>;
 
 impl<const W: usize, const D: usize> Tab<W, D> {
     const T: [[u32; D]; W] = sub_table::<W, D>();
 }
 
-/// Loads `src` right-aligned into `W` big-endian words, most significant first.
-///
-/// The most significant word holds the `len - 4*(W-1)` leading bytes, which is
-/// 1 to 4, so lengths that are not a multiple of 4 need no separate tail pass.
+/// Loads `src` right-aligned into `W` big-endian words; the top word takes the
+/// 1 to 4 leading bytes.
 #[inline]
 fn load_words<const W: usize>(src: &[u8]) -> [u32; W] {
     let mut words = [0u32; W];
@@ -541,7 +456,6 @@ fn load_words<const W: usize>(src: &[u8]) -> [u32; W] {
     words[0] = top;
 
     for (slot, chunk) in words[1..].iter_mut().zip(src[head..].chunks_exact(4)) {
-        // `chunks_exact(4)` guarantees every `chunk` is exactly 4 bytes.
         let bytes: [u8; 4] = chunk.try_into().unwrap_or_else(|_| unreachable!());
         *slot = u32::from_be_bytes(bytes);
     }
@@ -551,21 +465,13 @@ fn load_words<const W: usize>(src: &[u8]) -> [u32; W] {
 /// Matrix-multiplies `W` right-aligned words into `D` normalized, big-endian
 /// Base 58^5 digits.
 ///
-/// A u64 column accumulates `W` products of `x * p` with `x < 2^32` and
-/// `p < 58^5`. Checked exactly against the real table rather than bounded
-/// loosely: 11 rows is the widest batch that cannot overflow, so `W >= 12` runs
-/// as two halves with a carry sweep after each. After the first sweep every
-/// digit is below `RADIX_58_5`, which leaves room for the second batch's sum.
-///
-/// The `as u32` truncations are remainders of division by `RADIX_58_5 < 2^32`.
+/// Up to 11 rows fit a u64 column, so `W >= 12` runs as two halves with a
+/// sweep in between.
 #[inline]
-#[allow(clippy::cast_possible_truncation)]
 fn matrix<const W: usize, const D: usize>(words: &[u32; W]) -> [u64; D] {
     let table = &Tab::<W, D>::T;
     let mut acc = [0u64; D];
 
-    // Rows this batch covers; `W >= 12` overflows a u64 column, so it runs the
-    // low half first and folds the high half in after a reducing sweep.
     let first = if W <= 11 { 0 } else { W / 2 };
 
     for (k, slot) in acc.iter_mut().enumerate() {
@@ -603,9 +509,7 @@ fn sweep<const D: usize>(acc: &mut [u64; D]) {
     debug_assert_eq!(carry, 0, "the top digit absorbs the final carry");
 }
 
-/// Packs big-endian Base 58^5 digits into little-endian Base 58^10 digits.
-///
-/// `D` is always even, so the digits pair up exactly.
+/// Packs big-endian Base 58^5 digits (`D` is even) into little-endian Base 58^10.
 #[inline]
 fn pack_pairs<const D: usize, const H: usize>(acc: &[u64; D], out: &mut [u64; H]) -> usize {
     for (n, slot) in out.iter_mut().enumerate() {
@@ -620,10 +524,7 @@ fn pack_pairs<const D: usize, const H: usize>(acc: &[u64; D], out: &mut [u64; H]
     count
 }
 
-/// Encodes 1 to 56 bytes through the matrix kernel for width `W`.
-///
-/// Kept `inline`: outlining the fourteen monomorphizations measured 4% slower on
-/// small inputs.
+/// Encodes 1 to 56 bytes. Outlining this measured 4% slower on small inputs.
 #[inline]
 fn process_small<const W: usize, const D: usize, const H: usize>(
     src: &[u8],
@@ -641,59 +542,39 @@ fn process_small<const W: usize, const D: usize, const H: usize>(
 // General Arithmetic Kernel
 // ----------------------------------------------------------------------
 
-/// Converts one 64-byte block into little-endian Base 58^5 digits.
-///
-/// Always writes 18 digits and returns 18: 58^90 exceeds 2^512, so a 64-byte
-/// block never reaches a 19th. The 19th slot is still cleared, because the
-/// caller copies the whole array into its bignum state.
-///
-/// `v` is a Base 58^5 digit from `matrix_64`, always below `RADIX_58_5 < 2^32`.
+/// Converts one 64-byte block into 18 little-endian Base 58^5 limbs.
 #[inline]
-#[allow(clippy::cast_possible_truncation)]
-fn block_64_to_digits(src: &[u8; 64], out: &mut [u32; 19]) -> usize {
+fn block_64_to_digits(src: &[u8; 64]) -> [u64; 18] {
     let acc = matrix_64(src);
     let digits = acc.as_flattened();
 
-    // The matrix emits big-endian digits; the bignum state is little-endian.
-    for (slot, &v) in out[..18].iter_mut().rev().zip(digits[G_PAD..].iter()) {
-        *slot = v as u32;
+    let mut out = [0u64; 18];
+    for (slot, &v) in out.iter_mut().rev().zip(&digits[G_PAD..]) {
+        *slot = v;
     }
-    out[18] = 0;
-
-    18
+    out
 }
 
 /// Folds whole 64-byte blocks into the bignum: `state = state * 2^512 + block`.
 ///
-/// Schoolbook multiply by the 18-limb constant `P_512`, accumulated in u64. Each
-/// output column takes at most 18 products of `(58^5-1)^2 < 2^58.6`, so the column
-/// stays under `18 * 2^58.6 = 2^62.8` and nothing overflows before the single carry
-/// pass at the end. That is one division per limb per 64 bytes, against sixteen for
-/// the scalar Horner loop, and the multiply itself carries no loop-borne dependency.
+/// Schoolbook multiply by the 18-limb `P_512`, then one carry pass. A column is
+/// at most 18 products of `(58^5-1)^2 < 2^58.6`, so it stays under 2^62.8.
 ///
-/// The reduction stays a separate sweep on purpose. Folding it into the column loop
-/// puts the divide latency directly in the carry chain, where 18 multiplies are not
-/// enough to hide it; kept apart, the multiply has no loop-borne dependency at all
-/// and the divide chain runs at its own throughput.
-///
-/// The `as u32` truncations are remainders of division by `RADIX_58_5 < 2^32`,
-/// so they always fit `u32`.
+/// Limbs are below 58^5, so the `as u32` truncations are lossless; they tell LLVM
+/// both factors fit 32 bits, which lowers the multiply to `pmuludq` and lets it
+/// load adjacent u64 limbs without a shuffle.
 #[inline(never)]
 #[allow(clippy::cast_possible_truncation)]
-fn absorb_blocks(src: &[u8], digits_5: &mut [u32], tmp: &mut [u64], mut count_5: usize) -> usize {
-    let mut blk = [0u32; 19];
-
+fn absorb_blocks(src: &[u8], digits_5: &mut [u64], tmp: &mut [u64], mut count_5: usize) -> usize {
     for block in src.chunks_exact(64) {
-        // `chunks_exact(64)` guarantees every `block` is exactly 64 bytes.
         let block: &[u8; 64] = block.try_into().unwrap_or_else(|_| unreachable!());
-        let blk_count = block_64_to_digits(block, &mut blk);
+        let blk = block_64_to_digits(block);
         let n = count_5 + 18;
 
-        // Terms are state[c-j] * P[j] for every j indexing both operands.
         if count_5 < COMBA_MIN_LIMBS {
             tmp[..n].fill(0);
             for (i, &limb) in digits_5[..count_5].iter().enumerate() {
-                let a = u64::from(limb);
+                let a = u64::from(limb as u32);
                 for (slot, &p) in tmp[i..i + 18].iter_mut().zip(P_512.iter()) {
                     *slot += a * u64::from(p);
                 }
@@ -702,19 +583,17 @@ fn absorb_blocks(src: &[u8], digits_5: &mut [u32], tmp: &mut [u64], mut count_5:
             let mid_lo = 17.min(n);
             let mid_hi = count_5.max(mid_lo);
 
-            // Leading ramp: fewer than 18 terms because the column is near the base.
+            // Leading ramp: columns with fewer than 18 terms.
             for c in 0..mid_lo {
                 let k_max = c.min(count_5 - 1);
                 let sum = digits_5[..=k_max]
                     .iter()
                     .zip(P_512[c - k_max..=c].iter().rev())
-                    .map(|(&a, &p)| u64::from(a) * u64::from(p))
+                    .map(|(&a, &p)| u64::from(a as u32) * u64::from(p))
                     .sum();
                 tmp[c] = sum;
             }
-            // Middle: exactly 18 terms. `windows` hands out fixed-width slices, so
-            // the inner trip count is constant and the compiler unrolls it.
-            // 18 terms of (58^5-1)^2 < 2^58.6 leaves the column under 2^62.8.
+            // Middle: exactly 18 terms, a constant trip count that unrolls.
             for (slot, window) in tmp[mid_lo..mid_hi]
                 .iter_mut()
                 .zip(digits_5[mid_lo - 17..].windows(18))
@@ -722,31 +601,25 @@ fn absorb_blocks(src: &[u8], digits_5: &mut [u32], tmp: &mut [u64], mut count_5:
                 *slot = window
                     .iter()
                     .zip(P_512.iter().rev())
-                    .map(|(&a, &p)| u64::from(a) * u64::from(p))
+                    .map(|(&a, &p)| u64::from(a as u32) * u64::from(p))
                     .sum();
             }
-            // Trailing ramp: the column runs past the top limb of the state.
+            // Trailing ramp: columns past the top limb of the state.
             for c in mid_hi..n {
                 let sum = digits_5[c - 17..count_5]
                     .iter()
                     .zip(P_512[c + 1 - count_5..].iter().rev())
-                    .map(|(&a, &p)| u64::from(a) * u64::from(p))
+                    .map(|(&a, &p)| u64::from(a as u32) * u64::from(p))
                     .sum();
                 tmp[c] = sum;
             }
         }
 
-        for (slot, &d) in tmp.iter_mut().zip(blk[..blk_count].iter()) {
-            *slot += u64::from(d);
+        for (slot, &d) in tmp.iter_mut().zip(&blk) {
+            *slot += d;
         }
 
-        let mut carry = 0u64;
-        for (&t, slot) in tmp[..n].iter().zip(digits_5[..n].iter_mut()) {
-            let val = t + carry;
-            *slot = (val % RADIX_58_5) as u32;
-            carry = val / RADIX_58_5;
-        }
-        debug_assert_eq!(carry, 0, "state * 2^512 + block fits in count_5 + 18 limbs");
+        normalize(&tmp[..n], digits_5);
 
         count_5 = n;
         while count_5 > 1 && digits_5[count_5 - 1] == 0 {
@@ -757,50 +630,72 @@ fn absorb_blocks(src: &[u8], digits_5: &mut [u32], tmp: &mut [u64], mut count_5:
     count_5
 }
 
-/// Multiplies the state by `2^shift_bits` and adds `chunk`, in place.
-///
-/// The `as u32` truncations are remainders of division by `RADIX_58_5 < 2^32`,
-/// so they always fit `u32`.
 #[inline]
-#[allow(clippy::cast_possible_truncation)]
-fn horner_step(digits_5: &mut [u32], count_5: &mut usize, multiplier: u64, chunk: u64) {
+const fn carry_step(t: u64, carry: &mut u64, slot: &mut u64) {
+    let val = t + *carry;
+    *slot = val % RADIX_58_5;
+    *carry = val / RADIX_58_5;
+}
+
+/// Carry-normalizes little-endian `tmp` into `digits` as two interleaved divide
+/// chains, then folds the lower half's carry-out into the (normalized) upper half.
+#[inline]
+fn normalize(tmp: &[u64], digits: &mut [u64]) {
+    let h = tmp.len() / 2;
+    let (t_lo, t_hi) = tmp.split_at(h);
+    let (d_lo, d_hi) = digits[..tmp.len()].split_at_mut(h);
+
+    let (mut c_lo, mut c_hi) = (0u64, 0u64);
+    for ((&a, &b), (x, y)) in t_lo
+        .iter()
+        .zip(t_hi)
+        .zip(d_lo.iter_mut().zip(d_hi.iter_mut()))
+    {
+        carry_step(a, &mut c_lo, x);
+        carry_step(b, &mut c_hi, y);
+    }
+    for (&b, y) in t_hi[h..].iter().zip(d_hi[h..].iter_mut()) {
+        carry_step(b, &mut c_hi, y);
+    }
+    debug_assert_eq!(c_hi, 0, "state * 2^512 + block fits in count_5 + 18 limbs");
+
+    for slot in d_hi {
+        if c_lo == 0 {
+            break;
+        }
+        let val = *slot + c_lo;
+        *slot = val % RADIX_58_5;
+        c_lo = val / RADIX_58_5;
+    }
+    debug_assert_eq!(c_lo, 0, "state * 2^512 + block fits in count_5 + 18 limbs");
+}
+
+/// `state = state * multiplier + chunk`, in place.
+#[inline]
+fn horner_step(digits_5: &mut [u64], count_5: &mut usize, multiplier: u64, chunk: u64) {
     let mut carry = chunk;
     for slot in &mut digits_5[..*count_5] {
-        let val = u64::from(*slot) * multiplier + carry;
-        *slot = (val % RADIX_58_5) as u32;
+        let val = *slot * multiplier + carry;
+        *slot = val % RADIX_58_5;
         carry = val / RADIX_58_5;
     }
     while carry > 0 {
-        digits_5[*count_5] = (carry % RADIX_58_5) as u32;
+        digits_5[*count_5] = carry % RADIX_58_5;
         carry /= RADIX_58_5;
         *count_5 += 1;
     }
 }
 
-/// General kernel for inputs above 64 bytes, with Base 58^5 `u32` limbs as state.
+/// General kernel for inputs above 64 bytes, over little-endian Base 58^5 limbs.
 ///
-/// Deliberately `inline` rather than `inline(always)`: it has three callers (two
-/// scratch classes and the unbounded path), and duplicating the whole body into
-/// each costs more in instruction cache than the call saves.
-///
-/// The `as u32` truncations are remainders of division by `RADIX_58_5 < 2^32`.
+/// Leaves the result packed into Base 58^10 at the front of `digits_5` and
+/// returns its digit count.
 #[inline]
-#[allow(clippy::cast_possible_truncation)]
-fn process_general(
-    mut src: &[u8],
-    digits_5: &mut [u32],
-    tmp: &mut [u64],
-    out_digits: &mut [u64],
-) -> usize {
+fn process_general(mut src: &[u8], digits_5: &mut [u64], tmp: &mut [u64]) -> usize {
     let mut count_5 = 1;
 
-    // ----------------------------------------------------------------------
-    // 1. Head
-    // ----------------------------------------------------------------------
-    //
-    // Everything that is not a whole 64-byte block is consumed first, while the
-    // bignum is still short. The scalar Horner loop below costs one division per
-    // limb per 4 bytes, so it must never run against a grown bignum.
+    // The partial head goes first, while the state is still short: the scalar
+    // Horner loop costs a division per limb per 4 bytes.
 
     let mut blocks: &[u8] = &[];
     if src.len() >= 64 {
@@ -810,30 +705,25 @@ fn process_general(
         if b >= 2 || head >= 16 {
             let (h, rest) = src.split_at(head);
             if head == 0 {
-                // Nothing to scalar-process: seed the state from the first block.
-                let mut blk = [0u32; 19];
                 let block: &[u8; 64] = rest[..64].try_into().unwrap_or_else(|_| unreachable!());
-                count_5 = block_64_to_digits(block, &mut blk);
-                digits_5[..19].copy_from_slice(&blk);
+                digits_5[..18].copy_from_slice(&block_64_to_digits(block));
+                count_5 = 18;
                 blocks = &rest[64..];
             } else {
                 blocks = rest;
             }
             src = h;
         } else {
-            // Exactly one block and a short remainder. Seeding from the leading
-            // 64 bytes is free, so running the scalar loop over the few trailing
-            // bytes is cheaper than paying a full multiply to fold the block in.
-            let mut blk = [0u32; 19];
+            // One block and a short tail: seed from the block and Horner the tail
+            // in, cheaper than a full block multiply.
             let block: &[u8; 64] = src[..64].try_into().unwrap_or_else(|_| unreachable!());
-            count_5 = block_64_to_digits(block, &mut blk);
-            digits_5[..19].copy_from_slice(&blk);
+            digits_5[..18].copy_from_slice(&block_64_to_digits(block));
+            count_5 = 18;
             src = &src[64..];
         }
     }
 
     if src.len() >= 32 {
-        // --- 32-Byte Initialization ---
         let mut input = [0u32; 8];
         for (slot, chunk) in input.iter_mut().zip(src[..32].chunks_exact(4)) {
             *slot = load_be_u32(chunk);
@@ -851,20 +741,16 @@ fn process_general(
         let mut carry = 0u64;
         for k in (1..9).rev() {
             let val = acc[k] + carry;
-            digits_5[8 - k] = (val % RADIX_58_5) as u32;
+            digits_5[8 - k] = val % RADIX_58_5;
             carry = val / RADIX_58_5;
         }
         let val = acc[0] + carry;
-        digits_5[8] = (val % RADIX_58_5) as u32;
+        digits_5[8] = val % RADIX_58_5;
 
         count_5 = if digits_5[8] == 0 { 8 } else { 9 };
 
         src = &src[32..];
     }
-
-    // ----------------------------------------------------------------------
-    // 2. Accumulate Remaining Data
-    // ----------------------------------------------------------------------
 
     let mut chunks = src.chunks_exact(4);
     for chunk in chunks.by_ref() {
@@ -885,49 +771,31 @@ fn process_general(
         horner_step(digits_5, &mut count_5, 1u64 << (8 * tail.len()), chunk);
     }
 
-    // ----------------------------------------------------------------------
-    // 3. Block Horner: state = state * 2^512 + block
-    // ----------------------------------------------------------------------
-
     if !blocks.is_empty() {
         count_5 = absorb_blocks(blocks, digits_5, tmp, count_5);
     }
 
-    // ----------------------------------------------------------------------
-    // 4. Final Packing (Base 58^5 u32 -> Base 58^10 u64)
-    // ----------------------------------------------------------------------
-
-    let mut out_count = 0;
-    for (pair, slot) in digits_5[..count_5].chunks(2).zip(out_digits.iter_mut()) {
-        let low = u64::from(pair[0]);
-        let high = if pair.len() > 1 {
-            u64::from(pair[1])
+    // Pack pairs in place: slot `i` reads `2i` and `2i + 1`, never behind itself.
+    let packed = count_5.div_ceil(2);
+    for i in 0..packed {
+        let high = if 2 * i + 1 < count_5 {
+            digits_5[2 * i + 1]
         } else {
             0
         };
-        *slot = high * RADIX_58_5 + low;
-        out_count += 1;
+        digits_5[i] = high * RADIX_58_5 + digits_5[2 * i];
     }
-
-    out_count
+    packed
 }
 
-/// Runs the general kernel with `N` limbs of stack scratch.
-///
-/// Kept out of line so that its scratch -- up to 4.5 KB at `LARGE_LIMBS` --
-/// does not land in [`encode_slice`]'s frame, where every short input would
-/// pay for the stack probe it forces.
+/// Runs the general kernel with `N` limbs of stack scratch, out of line so short
+/// inputs do not pay for the large frame.
 #[inline(never)]
-fn encode_scratch<const N: usize, const H: usize>(
-    src: &[u8],
-    dst: &mut [u8],
-    config: &Config,
-) -> usize {
-    let mut limbs = [0u32; N];
+fn encode_scratch<const N: usize>(src: &[u8], dst: &mut [u8], config: &Config) -> usize {
+    let mut limbs = [0u64; N];
     let mut tmp = [0u64; N];
-    let mut digits = [0u64; H];
-    let n = process_general(src, &mut limbs, &mut tmp, &mut digits);
-    write_digits_to_string(config, &digits[..n], dst)
+    let n = process_general(src, &mut limbs, &mut tmp);
+    write_digits_to_string(config, &limbs[..n], dst)
 }
 
 // ----------------------------------------------------------------------
@@ -937,12 +805,10 @@ fn encode_scratch<const N: usize, const H: usize>(
 /// Writes the encoded leading-zero run of `input` into `dst`, returning its length.
 #[inline]
 fn write_leading_zeros(input: &[u8], dst: &mut [u8], z_char: u8) -> usize {
-    // Splatted across 8 bytes so leading zeros can be written a word at a time.
     let z_pattern = 0x0101_0101_0101_0101_u64 * u64::from(z_char);
 
     let mut zeros = 0;
     while input.len() - zeros >= 8 {
-        // The `>= 8` guard above guarantees this 8-byte slice always exists.
         let word_bytes: [u8; 8] = input[zeros..zeros + 8]
             .try_into()
             .unwrap_or_else(|_| unreachable!());
@@ -960,26 +826,42 @@ fn write_leading_zeros(input: &[u8], dst: &mut [u8], z_char: u8) -> usize {
     zeros
 }
 
+/// Upper bound on the encoded length of `input_len` bytes: `floor(1.37 * n) + 1`,
+/// since Base58 needs `log(256) / log(58) ≈ 1.366` characters per byte.
+///
+/// Computed in u64 so it cannot overflow for any 32-bit length.
+#[inline]
+#[allow(clippy::cast_possible_truncation)]
+pub(crate) const fn encoded_len(input_len: usize) -> usize {
+    let len = (input_len as u64).saturating_mul(137) / 100 + 1;
+    if len > usize::MAX as u64 {
+        usize::MAX
+    } else {
+        len as usize
+    }
+}
+
 /// Encodes `input` into `dst`, returning the number of bytes written.
 ///
-/// This is the zero-allocation kernel behind [`crate::Engine::encode_into`]; unlike
-/// that method it does not check `dst` is large enough up front. Capped at a
-/// 1024-byte input so its scratch can live on the stack; larger inputs go through
-/// [`crate::Engine::encode`], which falls back to heap scratch.
-///
-/// `dst` must hold at least `Engine::encoded_len(input.len())` bytes.
+/// This is the zero-allocation kernel behind [`crate::Engine::encode_into`], with
+/// the same contract. Capped at a 1024-byte input so its scratch can live on the
+/// stack; larger inputs go through [`encode_slice_unbounded`].
 ///
 /// # Errors
 ///
-/// Returns [`Error::InputTooBig`] if `input` exceeds 1024 bytes.
-///
-/// # Panics
-///
-/// Panics if `dst` is too small to hold the result.
+/// Returns [`Error::InputTooBig`] if `input` exceeds 1024 bytes, or
+/// [`Error::BufferTooSmall`] if `dst` is shorter than
+/// [`crate::Engine::encoded_len`] of the input.
 #[inline]
 pub fn encode_slice(input: &[u8], dst: &mut [u8], config: &Config) -> Result<usize, Error> {
+    if input.is_empty() {
+        return Ok(0);
+    }
     if input.len() > 1024 {
         return Err(Error::InputTooBig);
+    }
+    if dst.len() < encoded_len(input.len()) {
+        return Err(Error::BufferTooSmall);
     }
 
     let zeros = write_leading_zeros(input, dst, config.alphabet[0]);
@@ -989,8 +871,7 @@ pub fn encode_slice(input: &[u8], dst: &mut [u8], config: &Config) -> Result<usi
         return Ok(zeros);
     }
 
-    // Dispatch to kernel: each arm owns scratch sized for its length class, so
-    // the zeroing cost stays proportional to the work being done.
+    // Each arm sizes its scratch to its length class, so zeroing stays proportional.
     let dst = &mut dst[zeros..];
     let written = match src.len() {
         32 => {
@@ -1001,8 +882,7 @@ pub fn encode_slice(input: &[u8], dst: &mut [u8], config: &Config) -> Result<usi
             let src: &[u8; 64] = src.try_into().unwrap_or_else(|_| unreachable!());
             encode_fixed_64(src, dst, config)
         }
-        // Every other length up to 56 bytes goes through the matrix kernel,
-        // dispatched on its word count so W and D are compile-time constants.
+        // Dispatched on word count; D must match `DIGITS_FOR_W`.
         len if len <= 56 => match len.div_ceil(4) {
             1 => process_small::<1, 4, 2>(src, dst, config),
             2 => process_small::<2, 4, 2>(src, dst, config),
@@ -1019,16 +899,15 @@ pub fn encode_slice(input: &[u8], dst: &mut [u8], config: &Config) -> Result<usi
             13 => process_small::<13, 16, 8>(src, dst, config),
             _ => process_small::<14, 16, 8>(src, dst, config),
         },
-        // 57 to 63 bytes: leading zero bytes do not change the value, so
-        // zero-extending to 64 is exact, and the 64-byte kernel beats the two
-        // widest matrix classes it replaces.
+        // Zero-extending is exact and beats the two widest matrix classes.
         len if len < 64 => {
             let mut padded = [0u8; 64];
             padded[64 - len..].copy_from_slice(src);
             encode_fixed_64(&padded, dst, config)
         }
-        len if len <= 320 => encode_scratch::<MEDIUM_LIMBS, { MEDIUM_LIMBS / 2 }>(src, dst, config),
-        _ => encode_scratch::<LARGE_LIMBS, { LARGE_LIMBS / 2 }>(src, dst, config),
+        len if len <= 128 => encode_scratch::<SMALL_LIMBS>(src, dst, config),
+        len if len <= 320 => encode_scratch::<MEDIUM_LIMBS>(src, dst, config),
+        _ => encode_scratch::<LARGE_LIMBS>(src, dst, config),
     };
 
     Ok(zeros + written)
@@ -1039,33 +918,38 @@ pub fn encode_slice(input: &[u8], dst: &mut [u8], config: &Config) -> Result<usi
 /// This backs [`crate::Engine::encode`] for inputs larger than [`encode_slice`]'s
 /// stack-scratch ceiling.
 ///
-/// `dst` must hold at least `Engine::encoded_len(input.len())` bytes.
+/// # Errors
 ///
-/// # Panics
-///
-/// Panics if `dst` is too small to hold the result.
+/// Returns [`Error::BufferTooSmall`] if `dst` is shorter than
+/// [`crate::Engine::encoded_len`] of the input.
 #[cfg(feature = "std")]
-pub fn encode_slice_unbounded(input: &[u8], dst: &mut [u8], config: &Config) -> usize {
-    let zeros = write_leading_zeros(input, dst, config.alphabet[0]);
-
-    let src = &input[zeros..];
-    if src.is_empty() {
-        return zeros;
+pub fn encode_slice_unbounded(
+    input: &[u8],
+    dst: &mut [u8],
+    config: &Config,
+) -> Result<usize, Error> {
+    if input.is_empty() {
+        return Ok(0);
+    }
+    if dst.len() < encoded_len(input.len()) {
+        return Err(Error::BufferTooSmall);
     }
 
-    let dst = &mut dst[zeros..];
+    let zeros = write_leading_zeros(input, dst, config.alphabet[0]);
+    let src = &input[zeros..];
+    if src.is_empty() {
+        return Ok(zeros);
+    }
 
-    // Scratch sized generously for `src.len()`; mirrors the `LARGE_LIMBS` formula,
-    // scaled up instead of capped.
-    let limb_budget = (src.len() * 8).div_ceil(29) + 2;
-    let mut limbs = vec![0u32; limb_budget];
+    // At least `ceil(8n / 29) + 2` limbs, the `LARGE_LIMBS` budget, without the
+    // `8n` that overflows on 32-bit targets.
+    let limb_budget = src.len() / 29 * 8 + 10;
+    let mut limbs = vec![0u64; limb_budget];
     let mut tmp = vec![0u64; limb_budget];
-    let mut digits = vec![0u64; limb_budget / 2 + 1];
+    let n = process_general(src, &mut limbs, &mut tmp);
+    let written = write_digits_to_string(config, &limbs[..n], &mut dst[zeros..]);
 
-    let n = process_general(src, &mut limbs, &mut tmp, &mut digits);
-    let written = write_digits_to_string(config, &digits[..n], dst);
-
-    zeros + written
+    Ok(zeros + written)
 }
 
 #[cfg(test)]
@@ -1109,7 +993,6 @@ mod tests {
 
     #[test]
     fn p_512_is_two_to_the_512() {
-        // Reconstruct 2^512 from the limbs and compare against a shifted bignum.
         let mut acc = [0u32; 24];
         acc[16] = 1;
 
@@ -1127,10 +1010,7 @@ mod tests {
         assert_eq!(P_512, reference);
     }
 
-    /// `generate_weights` and `pow2_512_base_58_5` back const items (`TABLE_32`,
-    /// `TABLE_64`, `P_512`), so they normally run only at compile time. Calling
-    /// them here at runtime is what gives the bodies of these functions
-    /// coverage, not the const items themselves.
+    /// Const generators only run at compile time otherwise; this gives them coverage.
     #[test]
     fn table_generators_match_the_precomputed_consts() {
         assert_eq!(generate_weights::<8, 8>(), TABLE_32);
@@ -1138,54 +1018,61 @@ mod tests {
         assert_eq!(pow2_512_base_58_5(), P_512);
     }
 
-    /// `sub_table` backs `Tab::<W, D>::T`, another const item evaluated only at
-    /// compile time; call it directly so its body runs, too.
     #[test]
     fn sub_table_matches_direct_call() {
         assert_eq!(sub_table::<1, 4>(), Tab::<1, 4>::T);
         assert_eq!(sub_table::<14, 16>(), Tab::<14, 16>::T);
     }
 
-    /// `write_digits_to_string` is only ever called with a non-empty digit
-    /// slice by real encode paths; drive the empty-slice guard directly.
     #[test]
     fn write_digits_to_string_handles_empty_digits() {
         let mut dst = [0u8; 4];
         assert_eq!(write_digits_to_string(BITCOIN.config(), &[], &mut dst), 0);
     }
 
-    /// `process_general` below 64 bytes is only reached through
-    /// `encode_slice_unbounded` with a long zero prefix; call it directly to
-    /// cover the no-block path and check it against the public encoder.
+    /// The no-block path is otherwise only reached via a long zero prefix.
     #[test]
     fn process_general_below_64_bytes_matches_public_api() {
         let data: Vec<u8> = (0..40u32).map(|i| (i * 37 + 5) as u8).collect();
-        let mut limbs = [0u32; MEDIUM_LIMBS];
+        let mut limbs = [0u64; MEDIUM_LIMBS];
         let mut tmp = [0u64; MEDIUM_LIMBS];
-        let mut digits = [0u64; MEDIUM_LIMBS / 2];
-        let n = process_general(&data, &mut limbs, &mut tmp, &mut digits);
+        let n = process_general(&data, &mut limbs, &mut tmp);
 
         let mut dst = [0u8; 64];
-        let len = write_digits_to_string(BITCOIN.config(), &digits[..n], &mut dst);
+        let len = write_digits_to_string(BITCOIN.config(), &limbs[..n], &mut dst);
         assert_eq!(
             std::str::from_utf8(&dst[..len]).unwrap(),
             BITCOIN.encode(&data).unwrap()
         );
     }
 
-    /// `encode_slice`'s own `InputTooBig` guard is shadowed by `Engine::encode_into`,
-    /// which checks the same limit first; call the kernel directly to reach it.
     #[test]
-    fn encode_slice_rejects_oversized_input_directly() {
-        let mut dst = [0u8; 2048];
+    fn encode_kernels_reject_bad_sizes() {
+        let cfg = BITCOIN.config();
+        let mut dst = [0u8; 4096];
         assert_eq!(
-            encode_slice(&[0u8; 1025], &mut dst, BITCOIN.config()),
+            encode_slice(&[1u8; 1025], &mut dst, cfg),
             Err(Error::InputTooBig)
         );
+        assert_eq!(
+            encode_slice(&[1u8; 10], &mut dst[..13], cfg),
+            Err(Error::BufferTooSmall)
+        );
+        assert_eq!(
+            encode_slice_unbounded(&[1u8; 1500], &mut dst[..2055], cfg),
+            Err(Error::BufferTooSmall)
+        );
+        assert_eq!(encode_slice_unbounded(&[], &mut [], cfg), Ok(0));
     }
 
-    /// An all-zero input past the `_into` size ceiling exercises
-    /// `encode_slice_unbounded`'s own empty-after-zeros return.
+    #[test]
+    fn encoded_len_matches_the_plain_formula() {
+        let lens = (0..100_000).chain(u32::MAX as usize / 137..=u32::MAX as usize / 137 + 2);
+        for n in lens.chain([u32::MAX as usize]) {
+            assert_eq!(encoded_len(n) as u128, n as u128 * 137 / 100 + 1, "n={n}");
+        }
+    }
+
     #[test]
     #[cfg(feature = "std")]
     fn encode_unbounded_all_zero_large_input() {
@@ -1197,8 +1084,8 @@ mod tests {
 
     #[test]
     fn scratch_classes_are_large_enough() {
-        // Every length must fit the limb budget of the class it dispatches to.
         let limbs = |len: usize| (len * 8).div_ceil(29) + 2;
+        assert!(limbs(128) <= SMALL_LIMBS, "small class too tight");
         assert!(limbs(320) <= MEDIUM_LIMBS, "medium class too tight");
         assert!(limbs(1024) <= LARGE_LIMBS, "large class too tight");
     }

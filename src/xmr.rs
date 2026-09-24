@@ -2,8 +2,11 @@
 //!
 //! Data is split into 8-byte blocks, each encoded as exactly 11 characters. A
 //! shorter final block is padded to the fixed width for its byte count, so the
-//! encoded length depends only on the input length.
+//! encoded length depends only on the input length. Blocks are converted
+//! directly, one `u64` at a time, rather than through the general engine.
 
+use crate::decode::{RADIX_58_10, parse_chunk, parse_chunk_10};
+use crate::encode::{emit_full_block, emit_partial_block};
 use crate::{Error, MONERO};
 
 #[cfg(feature = "std")]
@@ -11,15 +14,33 @@ use std::string::String;
 #[cfg(feature = "std")]
 use std::vec::Vec;
 
+/// Encoded width of a block, indexed by its byte count.
 const XMR_ENCODED_SIZES: [usize; 9] = [0, 2, 3, 5, 6, 7, 9, 10, 11];
+
+/// Byte count of a block, indexed by its encoded width; `None` where no block
+/// encodes to that many characters.
+const XMR_DECODED_SIZES: [Option<usize>; 12] = [
+    Some(0),
+    None,
+    Some(1),
+    Some(2),
+    None,
+    Some(3),
+    Some(4),
+    Some(5),
+    None,
+    Some(6),
+    Some(7),
+    Some(8),
+];
 
 /// Returns the exact encoded length for `input_len` bytes.
 #[inline]
 #[must_use]
 pub const fn encoded_len(input_len: usize) -> usize {
-    let full_blocks = input_len / 8;
-    let remainder = input_len % 8;
-    (full_blocks * 11) + XMR_ENCODED_SIZES[remainder]
+    (input_len / 8)
+        .saturating_mul(11)
+        .saturating_add(XMR_ENCODED_SIZES[input_len % 8])
 }
 
 /// Returns the exact decoded length for `input_len` characters, or `None` if no
@@ -27,27 +48,9 @@ pub const fn encoded_len(input_len: usize) -> usize {
 #[inline]
 #[must_use]
 pub const fn decoded_len(input_len: usize) -> Option<usize> {
-    let full_blocks = input_len / 11;
-    let remainder = input_len % 11;
-
-    if remainder == 0 {
-        Some(full_blocks * 8)
-    } else {
-        let mut rem_bytes = 0;
-        let mut i = 1;
-        while i <= 8 {
-            if XMR_ENCODED_SIZES[i] == remainder {
-                rem_bytes = i;
-                break;
-            }
-            i += 1;
-        }
-
-        if rem_bytes == 0 {
-            None // Invalid length
-        } else {
-            Some((full_blocks * 8) + rem_bytes)
-        }
+    match XMR_DECODED_SIZES[input_len % 11] {
+        Some(tail) => Some(input_len / 11 * 8 + tail),
+        None => None,
     }
 }
 
@@ -55,108 +58,89 @@ pub const fn decoded_len(input_len: usize) -> Option<usize> {
 ///
 /// # Errors
 ///
-/// Returns [`Error::BufferTooSmall`] if `output` is not large enough, or an error
-/// from the underlying per-chunk [`MONERO`] encoder.
+/// Returns [`Error::BufferTooSmall`] if `output` is shorter than
+/// [`encoded_len`] of the input.
 pub fn encode_into<T: AsRef<[u8]>>(input: T, output: &mut [u8]) -> Result<usize, Error> {
     let input = input.as_ref();
-    if input.is_empty() {
-        return Ok(0);
+    let len = encoded_len(input.len());
+    let output = output.get_mut(..len).ok_or(Error::BufferTooSmall)?;
+    let config = MONERO.config();
+
+    let mut blocks = input.chunks_exact(8);
+    let mut outs = output.chunks_exact_mut(11);
+    for (block, out) in blocks.by_ref().zip(outs.by_ref()) {
+        let block: [u8; 8] = block.try_into().unwrap_or_else(|_| unreachable!());
+        let out: &mut [u8; 11] = out.try_into().unwrap_or_else(|_| unreachable!());
+        let [top, rest @ ..] = out;
+
+        let val = u64::from_be_bytes(block);
+        // `u64::MAX / 58^10` is 42, so the top character is always in range.
+        *top = config.alphabet[(val / RADIX_58_10) as usize];
+        emit_full_block(config, val % RADIX_58_10, rest);
     }
 
-    let expected_len = encoded_len(input.len());
-    if output.len() < expected_len {
-        return Err(Error::BufferTooSmall);
+    let tail = blocks.remainder();
+    if !tail.is_empty() {
+        let val = tail.iter().fold(0u64, |acc, &b| (acc << 8) | u64::from(b));
+        emit_partial_block(config, val, outs.into_remainder());
     }
 
-    let mut out_idx = 0;
-
-    for chunk in input.chunks(8) {
-        let target_len = XMR_ENCODED_SIZES[chunk.len()];
-
-        let mut temp = [0u8; 11];
-        let actual_len = MONERO.encode_into(chunk, &mut temp)?;
-
-        // '1' is the Monero alphabet's zero digit.
-        let pad_len = target_len.saturating_sub(actual_len);
-        output[out_idx..out_idx + pad_len].fill(b'1');
-        out_idx += pad_len;
-
-        output[out_idx..out_idx + actual_len].copy_from_slice(&temp[..actual_len]);
-        out_idx += actual_len;
-    }
-
-    Ok(out_idx)
+    Ok(len)
 }
 
 /// Decodes `input` into `output`, returning the number of bytes written.
 ///
 /// # Errors
 ///
-/// Returns [`Error::InvalidCharacter`] if `input` has an invalid chunk length or
-/// contains a character outside the alphabet, or [`Error::BufferTooSmall`] if
-/// `output` is not large enough.
+/// Returns [`Error::InvalidCharacter`] if `input` has an invalid length, contains
+/// a character outside the alphabet, or has a block whose value overflows its
+/// byte width, or [`Error::BufferTooSmall`] if `output` is shorter than
+/// [`decoded_len`] of the input.
 pub fn decode_into<T: AsRef<[u8]>>(input: T, output: &mut [u8]) -> Result<usize, Error> {
     let input = input.as_ref();
-    if input.is_empty() {
-        return Ok(0);
-    }
+    let len = decoded_len(input.len()).ok_or(Error::InvalidCharacter)?;
+    let output = output.get_mut(..len).ok_or(Error::BufferTooSmall)?;
+    let config = MONERO.config();
 
-    let expected_len = decoded_len(input.len()).ok_or(Error::InvalidCharacter)?;
-    if output.len() < expected_len {
-        return Err(Error::BufferTooSmall);
-    }
+    let mut blocks = input.chunks_exact(11);
+    let mut outs = output.chunks_exact_mut(8);
+    for (block, out) in blocks.by_ref().zip(outs.by_ref()) {
+        let block: &[u8; 11] = block.try_into().unwrap_or_else(|_| unreachable!());
+        let [top, rest @ ..] = block;
 
-    let mut out_idx = 0;
-
-    for chunk_chars in input.chunks(11) {
-        let expected_bytes = XMR_ENCODED_SIZES
-            .iter()
-            .position(|&n| n == chunk_chars.len())
+        // An invalid top character maps to 255, so it fails the same overflow
+        // check as a valid one above 42.
+        let val = u64::from(config.decode_map[usize::from(*top)])
+            .checked_mul(RADIX_58_10)
+            .and_then(|hi| hi.checked_add(parse_chunk_10(config, rest).ok()?))
             .ok_or(Error::InvalidCharacter)?;
-
-        // Leading '1's decode to zero bytes, so 11 characters can yield 11 bytes.
-        let mut temp = [0u8; 11];
-        let written = MONERO.decode_into(chunk_chars, &mut temp)?;
-
-        if written > expected_bytes {
-            let excess = written - expected_bytes;
-            // The block's value overflows its byte width.
-            if temp[..excess].iter().any(|&b| b != 0) {
-                return Err(Error::InvalidCharacter);
-            }
-            output[out_idx..out_idx + expected_bytes].copy_from_slice(&temp[excess..written]);
-            out_idx += expected_bytes;
-        } else {
-            let pad_len = expected_bytes - written;
-            output[out_idx..out_idx + pad_len].fill(0);
-            out_idx += pad_len;
-            output[out_idx..out_idx + written].copy_from_slice(&temp[..written]);
-            out_idx += written;
-        }
+        out.copy_from_slice(&val.to_be_bytes());
     }
 
-    Ok(out_idx)
+    let tail = blocks.remainder();
+    if !tail.is_empty() {
+        let out = outs.into_remainder();
+        let (val, _) = parse_chunk(config, tail)?;
+        if val >> (8 * out.len()) != 0 {
+            return Err(Error::InvalidCharacter);
+        }
+        out.copy_from_slice(&val.to_be_bytes()[8 - out.len()..]);
+    }
+
+    Ok(len)
 }
 
 /// Encodes `input` into a newly allocated Monero Base58 `String`.
 ///
 /// # Errors
 ///
-/// Returns an error from the underlying [`encode_into`].
+/// Never fails in practice; the `Result` mirrors [`encode_into`].
 #[cfg(feature = "std")]
 pub fn encode<T: AsRef<[u8]>>(input: T) -> Result<String, Error> {
     let input = input.as_ref();
-    if input.is_empty() {
-        return Ok(String::new());
-    }
-
-    let expected_len = encoded_len(input.len());
-    let mut out = vec![0u8; expected_len];
-
-    let actual_len = encode_into(input, &mut out)?;
-    out.truncate(actual_len);
-
-    // The Monero alphabet is ASCII, so this never fails.
+    let mut out = vec![0u8; encoded_len(input.len())];
+    encode_into(input, &mut out)?;
+    // The Monero alphabet is ASCII.
     String::from_utf8(out).map_err(|_| Error::WrongAlphabet)
 }
 
@@ -164,20 +148,12 @@ pub fn encode<T: AsRef<[u8]>>(input: T) -> Result<String, Error> {
 ///
 /// # Errors
 ///
-/// Returns [`Error::InvalidCharacter`] if `input` has an invalid length, or an
-/// error from the underlying [`decode_into`].
+/// Same as [`decode_into`].
 #[cfg(feature = "std")]
 pub fn decode<T: AsRef<[u8]>>(input: T) -> Result<Vec<u8>, Error> {
     let input = input.as_ref();
-    if input.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let expected_len = decoded_len(input.len()).ok_or(Error::InvalidCharacter)?;
-    let mut out = vec![0u8; expected_len];
-
-    let actual_len = decode_into(input, &mut out)?;
-    out.truncate(actual_len);
+    let mut out = vec![0u8; decoded_len(input.len()).ok_or(Error::InvalidCharacter)?];
+    decode_into(input, &mut out)?;
     Ok(out)
 }
 
@@ -195,8 +171,6 @@ mod tests {
 
     use super::*;
 
-    /// A character count with no entry in [`XMR_ENCODED_SIZES`] has no valid
-    /// decoded length.
     #[test]
     fn decoded_len_rejects_invalid_remainder() {
         assert_eq!(decoded_len(1), None);
@@ -204,9 +178,6 @@ mod tests {
         assert_eq!(decoded_len(8), None);
     }
 
-    /// `encode`/`decode` special-case empty input themselves, so `encode_into`
-    /// and `decode_into`'s own empty-input returns are only reachable by
-    /// calling them directly.
     #[test]
     fn into_variants_handle_empty_input_directly() {
         let mut buf = [0u8; 11];
@@ -234,9 +205,7 @@ mod tests {
         assert_eq!(decode_into("zzzz", &mut buf), Err(Error::InvalidCharacter));
     }
 
-    /// "zz" decodes (via the plain [`MONERO`] engine) to 2 bytes, but a 2-char
-    /// chunk maps to only 1 expected byte, so the excess byte is checked for
-    /// overflow -- and here it is nonzero.
+    /// "zz" is 3363, too big for the one byte a 2-character block holds.
     #[test]
     fn decode_into_rejects_excess_overflow() {
         let mut buf = [0u8; 1];
