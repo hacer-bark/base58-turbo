@@ -211,7 +211,7 @@ fn test_len_calculators() {
 #[test]
 fn test_engine_config_access() {
     let config = BITCOIN.config();
-    assert_eq!(config.alphabet[0], b'1');
+    assert_eq!(config.alphabet()[0], b'1');
 }
 
 // ======================================================================
@@ -550,7 +550,7 @@ fn dispatch_matches_reference_for_32_byte_inputs() {
                 if z < 32 && d[z] == 0 {
                     d[z] = 1; // keep the run length exactly z
                 }
-                let want = reference_base58(&d, engine.config().alphabet);
+                let want = reference_base58(&d, *engine.config().alphabet());
                 assert_eq!(engine.encode(&d).unwrap(), want, "z={z} data={d:?}");
                 assert_eq!(engine.decode(&want).unwrap(), d, "roundtrip z={z}");
             }
@@ -561,7 +561,7 @@ fn dispatch_matches_reference_for_32_byte_inputs() {
             v[31] = 1;
             v
         }] {
-            let want = reference_base58(&d, engine.config().alphabet);
+            let want = reference_base58(&d, *engine.config().alphabet());
             assert_eq!(engine.encode(&d).unwrap(), want, "boundary {d:?}");
         }
         // Bulk random.
@@ -569,7 +569,7 @@ fn dispatch_matches_reference_for_32_byte_inputs() {
             let d: [u8; 32] = core::array::from_fn(|_| (xs(&mut s) >> 24) as u8);
             assert_eq!(
                 engine.encode(&d).unwrap(),
-                reference_base58(&d, engine.config().alphabet)
+                reference_base58(&d, *engine.config().alphabet())
             );
         }
     }
@@ -636,7 +636,7 @@ fn dispatch_matches_reference_for_64_byte_inputs() {
                 if z < 64 && d[z] == 0 {
                     d[z] = 1;
                 }
-                let want = reference_base58(&d, engine.config().alphabet);
+                let want = reference_base58(&d, *engine.config().alphabet());
                 assert_eq!(engine.encode(&d).unwrap(), want, "z={z}");
                 assert_eq!(engine.decode(&want).unwrap(), d, "roundtrip z={z}");
             }
@@ -648,14 +648,14 @@ fn dispatch_matches_reference_for_64_byte_inputs() {
         }] {
             assert_eq!(
                 engine.encode(&d).unwrap(),
-                reference_base58(&d, engine.config().alphabet)
+                reference_base58(&d, *engine.config().alphabet())
             );
         }
         for _ in 0..20_000 {
             let d: [u8; 64] = core::array::from_fn(|_| (xs(&mut s) >> 24) as u8);
             assert_eq!(
                 engine.encode(&d).unwrap(),
-                reference_base58(&d, engine.config().alphabet)
+                reference_base58(&d, *engine.config().alphabet())
             );
         }
     }
@@ -731,11 +731,11 @@ fn reference_base58(input: &[u8], alphabet: [u8; 58]) -> String {
 
 /// Schoolbook base-58 decode: repeated multiply-accumulate over base-256 bytes.
 fn reference_decode(input: &[u8], config: &Config) -> Option<Vec<u8>> {
-    let zero = config.alphabet[0];
+    let zero = config.alphabet()[0];
     let lz = input.iter().take_while(|&&b| b == zero).count();
     let mut num: Vec<u8> = vec![0];
     for &ch in &input[lz..] {
-        let d = config.decode_map[ch as usize];
+        let d = config.decode_map()[ch as usize];
         if d & 0x80 != 0 {
             return None;
         }
@@ -783,7 +783,7 @@ fn decode_matches_reference_at_every_length() {
         for len in 0..=136usize {
             for zeros in 0..=len.min(4) {
                 for trial in 0..12 {
-                    let mut input = vec![cfg.alphabet[0]; zeros];
+                    let mut input = vec![cfg.alphabet()[0]; zeros];
                     for _ in zeros..len {
                         // Trials 0 and 1 pin the extremes: an all-max payload
                         // exercises the top carry out of the matrix, an all-min
@@ -793,7 +793,7 @@ fn decode_matches_reference_at_every_length() {
                             1 => 1,
                             _ => ((xs(&mut s) >> 33) % 58) as usize,
                         };
-                        input.push(cfg.alphabet[idx]);
+                        input.push(cfg.alphabet()[idx]);
                     }
                     let want = reference_decode(&input, cfg).unwrap();
                     assert_eq!(
@@ -815,9 +815,9 @@ fn decode_matrix_rejects_invalid_characters() {
         // validated per group, and the partial groups sit at different offsets.
         for len in 1..=136usize {
             for pos in 0..len {
-                let mut input = vec![cfg.alphabet[7]; len];
+                let mut input = vec![cfg.alphabet()[7]; len];
                 for bad in [0x00u8, 0x2f, 0x30, 0x7f, 0x80, 0xff] {
-                    if cfg.decode_map[bad as usize] & 0x80 == 0 {
+                    if cfg.decode_map()[bad as usize] & 0x80 == 0 {
                         continue; // actually valid in this alphabet
                     }
                     input[pos] = bad;
@@ -837,7 +837,7 @@ fn decode_matrix_respects_exact_output_buffers() {
     for engine in decode_test_engines() {
         let cfg = engine.config();
         for len in 1..=136usize {
-            let input: Vec<u8> = (0..len).map(|i| cfg.alphabet[(i * 7 + 3) % 58]).collect();
+            let input: Vec<u8> = (0..len).map(|i| cfg.alphabet()[(i * 7 + 3) % 58]).collect();
             let want = reference_decode(&input, cfg).unwrap();
 
             // `decode_into` contracts on `decoded_len`, an upper bound, so the
@@ -903,7 +903,7 @@ fn decode_matrix_round_trips_random_payloads() {
 #[test]
 fn group_parse_round_trips_every_payload_length() {
     for engine in [BITCOIN, RIPPLE, FLICKR] {
-        let alphabet = engine.config().alphabet;
+        let alphabet = *engine.config().alphabet();
         // Character counts 1..=120 cover every matrix head (1..4), every tail
         // length (0..9) and both sides of the matrix/Horner threshold.
         for len in 1..=120usize {
@@ -920,7 +920,7 @@ fn group_parse_round_trips_every_payload_length() {
 #[test]
 fn group_parse_rejects_invalid_at_every_position() {
     for engine in [BITCOIN, RIPPLE, FLICKR] {
-        let alphabet = engine.config().alphabet;
+        let alphabet = *engine.config().alphabet();
         let mut outside: Vec<u8> = (0u8..=255).filter(|b| !alphabet.contains(b)).collect();
         outside.truncate(8);
 
@@ -945,7 +945,7 @@ fn group_parse_handles_extreme_digits() {
     // All-lowest and all-highest characters at every length: the lowest keeps
     // every group sum at zero, the highest puts each one at its maximum.
     for engine in [BITCOIN, RIPPLE, FLICKR] {
-        let alphabet = engine.config().alphabet;
+        let alphabet = *engine.config().alphabet();
         for len in 1..=120usize {
             for ch in [alphabet[0], alphabet[57]] {
                 let text = vec![ch; len];

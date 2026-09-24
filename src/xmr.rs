@@ -134,11 +134,16 @@ pub fn decode_into<T: AsRef<[u8]>>(input: T, output: &mut [u8]) -> Result<usize,
 ///
 /// # Errors
 ///
-/// Never fails in practice; the `Result` mirrors [`encode_into`].
+/// Returns [`Error::InputTooBig`] only if the output would exceed `isize::MAX`
+/// bytes, which needs an input of about 1.5 GB on a 32-bit target.
 #[cfg(feature = "std")]
 pub fn encode<T: AsRef<[u8]>>(input: T) -> Result<String, Error> {
     let input = input.as_ref();
-    let mut out = vec![0u8; encoded_len(input.len())];
+    let len = encoded_len(input.len());
+    if len > isize::MAX as usize {
+        return Err(Error::InputTooBig);
+    }
+    let mut out = vec![0u8; len];
     encode_into(input, &mut out)?;
     // The Monero alphabet is ASCII.
     String::from_utf8(out).map_err(|_| Error::WrongAlphabet)
@@ -148,7 +153,8 @@ pub fn encode<T: AsRef<[u8]>>(input: T) -> Result<String, Error> {
 ///
 /// # Errors
 ///
-/// Same as [`decode_into`].
+/// Returns [`Error::InvalidCharacter`] under the same conditions as
+/// [`decode_into`].
 #[cfg(feature = "std")]
 pub fn decode<T: AsRef<[u8]>>(input: T) -> Result<Vec<u8>, Error> {
     let input = input.as_ref();

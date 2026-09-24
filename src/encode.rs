@@ -921,7 +921,8 @@ pub fn encode_slice(input: &[u8], dst: &mut [u8], config: &Config) -> Result<usi
 /// # Errors
 ///
 /// Returns [`Error::BufferTooSmall`] if `dst` is shorter than
-/// [`crate::Engine::encoded_len`] of the input.
+/// [`crate::Engine::encoded_len`] of the input, or [`Error::InputTooBig`] if the
+/// scratch would exceed `isize::MAX` bytes (about 1 GB of input on 32-bit).
 #[cfg(feature = "std")]
 pub fn encode_slice_unbounded(
     input: &[u8],
@@ -944,6 +945,9 @@ pub fn encode_slice_unbounded(
     // At least `ceil(8n / 29) + 2` limbs, the `LARGE_LIMBS` budget, without the
     // `8n` that overflows on 32-bit targets.
     let limb_budget = src.len() / 29 * 8 + 10;
+    if limb_budget > isize::MAX as usize / size_of::<u64>() {
+        return Err(Error::InputTooBig);
+    }
     let mut limbs = vec![0u64; limb_budget];
     let mut tmp = vec![0u64; limb_budget];
     let n = process_general(src, &mut limbs, &mut tmp);

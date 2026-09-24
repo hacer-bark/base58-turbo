@@ -15,13 +15,14 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
-- `Config::lut_58_pow` (**breaking** for code that builds `Config` with a struct
-  literal) and `BAD_DIGIT`: a decode table that folds each character's positional
-  weight into the lookup and validates four characters with one test.
+- `Config::alphabet()` and `Config::decode_map()` read-only accessors.
 - Experimental Kani proof harnesses for the encoder kernels (`cargo kani`).
 
 ### Changed
 
+- **Breaking:** `Config` fields are private; use `Config::new` and the new
+  accessors. A hand-built `Config` with inconsistent tables could make the
+  decoder overflow (a panic in debug builds) or return wrong output.
 - License changed from `MIT OR Apache-2.0` to `0BSD`.
 - Faster scalar encoder and decoder. Encoding above 64 bytes gained another
   10-30% (1 KiB: 51k -> 37k cycles on an i7-8750H).
@@ -40,6 +41,11 @@ All notable changes to this project are documented here. The format follows
 - On 32-bit targets, `Engine::encoded_len` saturated for inputs over ~31 MB,
   so `Engine::encode` panicked, and `Engine::decode` overflowed its scratch
   sizing past ~733 K characters.
+- On 32-bit targets, `Engine::encode` and `xmr::encode` panicked with a capacity
+  overflow for inputs of roughly 1 GB and up; they now return
+  `Error::InputTooBig`.
+- `Engine::decode_into` docs omitted the 1024-byte decoded-size limit and that
+  `output` must be at least as long as `input`.
 - Builds on the 1.87 MSRV again (a const only used in assertions tripped
   `dead_code`).
 - Documentation, README benchmark figures, CI jobs, and the fuzz target no longer

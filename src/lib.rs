@@ -98,7 +98,8 @@ pub enum Error {
     BufferTooSmall,
     /// The input is too big for the zero-allocation `_into` API: over 1024 bytes
     /// to encode, or over 2048 characters or 1024 decoded bytes to decode. The
-    /// allocating [`Engine::encode`] / [`Engine::decode`] have no such limit.
+    /// allocating APIs only return it when a buffer would exceed `isize::MAX`
+    /// bytes, which is reachable on 32-bit targets alone.
     InputTooBig,
     /// The alphabet has a duplicate or non-ASCII character.
     WrongAlphabet,
@@ -123,17 +124,19 @@ impl std::error::Error for Error {}
 // ======================================================================
 
 /// Pre-computed lookup tables for one alphabet.
+///
+/// Only [`Config::new`] builds one, so the kernels can rely on the tables being
+/// consistent with the alphabet.
 #[derive(Debug, Clone, Copy)]
 pub struct Config {
-    /// Alphabet of chars for encoding and decoding.
-    pub alphabet: [u8; 58],
-    /// Pre-computed map of values for decoding.
-    pub decode_map: [u8; 256],
-    /// Pre-computed LUT of squared values for encoding.
-    pub lut_58_squared: [u16; 3364],
-    /// Pre-computed decode weights: `lut_58_pow[k][b]` is `digit(b) * 58^k`, or
-    /// [`BAD_DIGIT`] when `b` is outside the alphabet. See [`crate::decode`].
-    pub lut_58_pow: [[u32; 256]; 4],
+    alphabet: [u8; 58],
+    decode_map: [u8; 256],
+    /// Two-character pairs for encoding: entry `i` is `alphabet[i / 58]`,
+    /// `alphabet[i % 58]`, big-endian.
+    lut_58_squared: [u16; 3364],
+    /// Decode weights: `lut_58_pow[k][b]` is `digit(b) * 58^k`, or [`BAD_DIGIT`]
+    /// when `b` is outside the alphabet.
+    lut_58_pow: [[u32; 256]; 4],
 }
 
 impl Config {
@@ -166,15 +169,30 @@ impl Config {
             lut_58_pow: gen_lut_pow(&map),
         })
     }
+
+    /// Returns the 58-character alphabet, indexed by digit value.
+    #[inline]
+    #[must_use]
+    pub const fn alphabet(&self) -> &[u8; 58] {
+        &self.alphabet
+    }
+
+    /// Returns the byte-to-digit map: `decode_map()[b]` is the digit value of
+    /// byte `b`, or 255 when `b` is outside the alphabet.
+    #[inline]
+    #[must_use]
+    pub const fn decode_map(&self) -> &[u8; 256] {
+        &self.decode_map
+    }
 }
 
-/// Sentinel stored in [`Config::lut_58_pow`] for a byte outside the alphabet.
+/// Sentinel stored in `Config::lut_58_pow` for a byte outside the alphabet.
 ///
 /// A valid entry is at most `57 * 58^3 = 11_121_384`, so the sum of any four is
 /// below `2^26`, while a sum containing at least one sentinel is at least `2^28`
 /// and at most `2^30`. One test of the bits from 26 up therefore validates a
 /// whole group of four characters, with no per-character branch.
-pub const BAD_DIGIT: u32 = 1 << 28;
+pub(crate) const BAD_DIGIT: u32 = 1 << 28;
 
 /// Builds the decode weight table: `[k][b] = digit(b) * 58^k` for `k` in 0..4.
 const fn gen_lut_pow(map: &[u8; 256]) -> [[u32; 256]; 4] {
@@ -355,10 +373,14 @@ impl Engine {
     /// Encodes `input` into the `output` buffer.
     /// Returns the actual number of bytes written.
     ///
+    /// `output` must hold at least [`Engine::encoded_len`] of the input, even when
+    /// the result is shorter.
+    ///
     /// # Errors
     ///
     /// Returns [`Error::InputTooBig`] if `input` exceeds 1024 bytes, or
-    /// [`Error::BufferTooSmall`] if `output` is not large enough.
+    /// [`Error::BufferTooSmall`] if `output` is shorter than
+    /// [`Engine::encoded_len`] of the input.
     #[inline]
     pub fn encode_into<T: AsRef<[u8]>>(&self, input: T, output: &mut [u8]) -> Result<usize, Error> {
         encode_slice(input.as_ref(), output, &self.config)
@@ -367,11 +389,16 @@ impl Engine {
     /// Decodes `input` into the `output` buffer.
     /// Returns the actual number of bytes written.
     ///
+    /// `output` must hold at least [`Engine::decoded_len`] of the input, even when
+    /// the result is shorter. Bytes of `output` past the returned length are
+    /// unspecified.
+    ///
     /// # Errors
     ///
-    /// Returns [`Error::InputTooBig`] if `input` exceeds 2048 bytes,
-    /// [`Error::BufferTooSmall`] if `output` is not large enough, or
-    /// [`Error::InvalidCharacter`] if `input` contains a character outside the alphabet.
+    /// Returns [`Error::InputTooBig`] if `input` exceeds 2048 bytes or decodes to
+    /// more than 1024 bytes, [`Error::BufferTooSmall`] if `output` is shorter than
+    /// `input`, or [`Error::InvalidCharacter`] if `input` contains a character
+    /// outside the alphabet.
     #[inline]
     pub fn decode_into<T: AsRef<[u8]>>(&self, input: T, output: &mut [u8]) -> Result<usize, Error> {
         let input = input.as_ref();
@@ -402,9 +429,8 @@ impl Engine {
     ///
     /// # Errors
     ///
-    /// This can only fail if the alphabet were internally inconsistent, which
-    /// [`Config::new`] already rejects at construction; the `Result` is kept for
-    /// forward-compatibility.
+    /// Returns [`Error::InputTooBig`] only if the output or scratch would exceed
+    /// `isize::MAX` bytes, which needs an input of about 1 GB on a 32-bit target.
     #[inline]
     #[cfg(feature = "std")]
     pub fn encode<T: AsRef<[u8]>>(&self, input: T) -> Result<String, Error> {
@@ -414,6 +440,9 @@ impl Engine {
         }
 
         let max_len = self.encoded_len(input.len());
+        if max_len > isize::MAX as usize {
+            return Err(Error::InputTooBig);
+        }
         let mut out = vec![0u8; max_len];
 
         let actual_len = match encode_slice(input, &mut out, &self.config) {

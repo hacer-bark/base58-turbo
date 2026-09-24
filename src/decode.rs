@@ -3,10 +3,9 @@
 //! [`decode_slice`] is the zero-allocation primitive behind [`crate::Engine::decode_into`].
 //! Prefer the [`crate::Engine`] methods unless you need a custom [`Config`].
 //!
-//! Characters are read through [`crate::Config::lut_58_pow`], which folds the
-//! positional weight into the lookup: a group of four characters is a plain sum
-//! of four entries, and that sum doubles as the validity check (see
-//! [`crate::BAD_DIGIT`]).
+//! Characters are read through `Config::lut_58_pow`, which folds the positional
+//! weight into the lookup: a group of four characters is a plain sum of four
+//! entries, and that sum doubles as the validity check (see `BAD_DIGIT`).
 
 use crate::{BAD_DIGIT, Config, Error};
 
@@ -497,7 +496,8 @@ fn count_leading_zeros(input: &[u8], zero_char: u8) -> usize {
 /// This is the zero-allocation kernel behind [`crate::Engine::decode_into`]. Unlike
 /// that method it accepts any `dst` that fits the actual output. Capped at a
 /// 2048-byte input (1024-byte output) so its scratch can live on the stack; larger
-/// inputs go through [`decode_slice_unbounded`].
+/// inputs go through [`decode_slice_unbounded`]. Bytes of `dst` past the returned
+/// length are unspecified.
 ///
 /// # Errors
 ///
@@ -540,7 +540,7 @@ pub fn decode_slice(input: &[u8], dst: &mut [u8], config: &Config) -> Result<usi
 /// Decodes `input` into `dst` using heap-allocated scratch, with no size limit.
 ///
 /// This backs [`crate::Engine::decode`] for inputs larger than [`decode_slice`]'s
-/// stack-scratch ceiling.
+/// stack-scratch ceiling. Bytes of `dst` past the returned length are unspecified.
 ///
 /// # Errors
 ///
