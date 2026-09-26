@@ -977,10 +977,11 @@ mod tests {
     }
 
     #[test]
-    fn encoded_len_matches_the_plain_formula() {
+    fn encoded_len_matches_the_saturating_formula() {
         let lens = (0..100_000).chain(u32::MAX as usize / 137..=u32::MAX as usize / 137 + 2);
         for n in lens.chain([u32::MAX as usize]) {
-            assert_eq!(encoded_len(n) as u128, n as u128 * 137 / 100 + 1, "n={n}");
+            let expected = (n as u128 * 137 / 100 + 1).min(usize::MAX as u128);
+            assert_eq!(encoded_len(n) as u128, expected, "n={n}");
         }
     }
 
