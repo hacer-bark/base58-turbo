@@ -5,9 +5,9 @@
 //! encoded length depends only on the input length. Blocks are converted
 //! directly, one `u64` at a time, rather than through the general engine.
 
-use crate::decode::{RADIX_58_10, parse_chunk, parse_chunk_10};
+use crate::decode::{parse_chunk, parse_chunk_10};
 use crate::encode::{emit_full_block, emit_partial_block};
-use crate::{Error, MONERO};
+use crate::{Error, MONERO, RADIX_58_10};
 
 #[cfg(feature = "std")]
 use std::string::String;

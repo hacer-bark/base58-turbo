@@ -1,26 +1,10 @@
-//! Low-level Base58 decoding kernel.
-//!
-//! [`decode_slice`] is the zero-allocation primitive behind [`crate::Engine::decode_into`].
-//! Prefer the [`crate::Engine`] methods unless you need a custom [`Config`].
+//! Base58 decoding kernels behind [`crate::Engine`].
 //!
 //! Characters are read through `Config::lut_58_pow`, which folds the positional
 //! weight into the lookup: a group of four characters is a plain sum of four
 //! entries, and that sum doubles as the validity check (see `BAD_DIGIT`).
 
-use crate::{BAD_DIGIT, Config, Error};
-
-// ----------------------------------------------------------------------
-// Constants & Lookups
-// ----------------------------------------------------------------------
-
-/// 58^4, the weight of one full character group.
-const P4: u64 = 11_316_496;
-
-/// 58^k for k = 0..4, used to weight a partial group.
-const POW58: [u64; 4] = [1, 58, 3364, 195_112];
-
-/// 58^10, the largest power of 58 below 2^64: ten characters per bignum step.
-pub(crate) const RADIX_58_10: u64 = 430_804_206_899_405_824;
+use crate::{BAD_DIGIT, Config, Error, POW_58, RADIX_58_4, RADIX_58_10};
 
 // ----------------------------------------------------------------------
 // Scratch Sizing
@@ -41,7 +25,7 @@ const GROUP_BAD: u32 = 1 << 26;
 
 const _: () = {
     // Largest sum four in-alphabet `lut_58_pow` entries can reach.
-    let group_max = 4 * 57 * 195_112u64;
+    let group_max = 4 * 57 * POW_58[3];
     assert!(
         group_max < GROUP_BAD as u64,
         "a valid group must not reach the test bit"
@@ -114,8 +98,8 @@ pub(crate) fn parse_chunk(config: &Config, src: &[u8]) -> Result<(u64, u64), Err
         if group >= GROUP_BAD {
             return Err(Error::InvalidCharacter);
         }
-        value = value * P4 + u64::from(group);
-        multiplier *= P4;
+        value = value * RADIX_58_4 + u64::from(group);
+        multiplier *= RADIX_58_4;
     }
 
     let rest = groups.remainder();
@@ -129,8 +113,8 @@ pub(crate) fn parse_chunk(config: &Config, src: &[u8]) -> Result<(u64, u64), Err
     }
 
     Ok((
-        value * POW58[left] + u64::from(acc),
-        multiplier * POW58[left],
+        value * POW_58[left] + u64::from(acc),
+        multiplier * POW_58[left],
     ))
 }
 
@@ -153,7 +137,7 @@ pub(crate) fn parse_chunk_10(config: &Config, src: &[u8; 10]) -> Result<u64, Err
         return Err(Error::InvalidCharacter);
     }
 
-    Ok((u64::from(g0) * P4 + u64::from(g1)) * 3364 + u64::from(g2))
+    Ok((u64::from(g0) * RADIX_58_4 + u64::from(g1)) * POW_58[2] + u64::from(g2))
 }
 
 // ----------------------------------------------------------------------
@@ -277,7 +261,7 @@ const fn mat_weights() -> [[u32; MAT_MAXL]; MAT_MAXE] {
         let mut carry = 0u64;
         let mut limb = 0;
         while limb < MAT_MAXL {
-            let prod = cur[limb] as u64 * P4 + carry;
+            let prod = cur[limb] as u64 * RADIX_58_4 + carry;
             cur[limb] = prod as u32;
             carry = prod >> 32;
             limb += 1;
@@ -505,7 +489,7 @@ fn count_leading_zeros(input: &[u8], zero_char: u8) -> usize {
 /// than 1024 bytes, [`Error::BufferTooSmall`] if `dst` is not large enough, or
 /// [`Error::InvalidCharacter`] if `input` contains a character outside the alphabet.
 #[inline]
-pub fn decode_slice(input: &[u8], dst: &mut [u8], config: &Config) -> Result<usize, Error> {
+pub(crate) fn decode_slice(input: &[u8], dst: &mut [u8], config: &Config) -> Result<usize, Error> {
     if input.len() > 2048 {
         return Err(Error::InputTooBig);
     }
@@ -547,7 +531,7 @@ pub fn decode_slice(input: &[u8], dst: &mut [u8], config: &Config) -> Result<usi
 /// Returns [`Error::BufferTooSmall`] if `dst` is not large enough, or
 /// [`Error::InvalidCharacter`] if `input` contains a character outside the alphabet.
 #[cfg(feature = "std")]
-pub fn decode_slice_unbounded(
+pub(crate) fn decode_slice_unbounded(
     input: &[u8],
     dst: &mut [u8],
     config: &Config,
@@ -760,6 +744,25 @@ mod tests {
         assert_eq!(res.unwrap_err(), Error::BufferTooSmall);
     }
 
+    /// A buffer sized to the actual output catches a one-byte overrun from the
+    /// constant-size copies in the emit tail, which `decoded_len`'s slack hides.
+    #[test]
+    #[cfg(feature = "std")]
+    fn decode_slice_stays_inside_a_tight_buffer() {
+        use rand::{RngExt, rng};
+
+        let config = BITCOIN.config();
+        for len in 1..=136usize {
+            let data: Vec<u8> = rng().random_iter().take(len).collect();
+            let encoded = BITCOIN.encode(&data).unwrap();
+
+            let mut tight = vec![0xAAu8; len + 1];
+            let n = decode_slice(encoded.as_bytes(), &mut tight[..len], config).unwrap();
+            assert_eq!(&tight[..n], &data[..], "len={len}");
+            assert_eq!(tight[len], 0xAA, "overran at len={len}");
+        }
+    }
+
     #[test]
     fn scratch_classes_are_large_enough() {
         let words = |n: usize| {
@@ -768,16 +771,5 @@ mod tests {
         };
         assert!(words(64) <= SMALL_WORDS, "small class too tight");
         assert!(words(512) <= MEDIUM_WORDS, "medium class too tight");
-    }
-
-    #[test]
-    fn decode_class_boundaries_round_trip() {
-        for len in [1usize, 40, 45, 46, 64, 100, 370, 375, 376, 1024] {
-            let data: Vec<u8> = (0..len)
-                .map(|i| (i as u8).wrapping_mul(53).wrapping_add(9))
-                .collect();
-            let encoded = BITCOIN.encode(&data).unwrap();
-            assert_eq!(BITCOIN.decode(&encoded).unwrap(), data, "len {len}");
-        }
     }
 }

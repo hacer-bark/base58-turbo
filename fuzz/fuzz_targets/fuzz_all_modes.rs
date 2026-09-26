@@ -1,5 +1,5 @@
 #![no_main]
-use base58_turbo::{BITCOIN, Engine, Error, FLICKR, MONERO, RIPPLE};
+use base58_turbo::{BITCOIN, Engine, Error, FLICKR, MONERO, RIPPLE, xmr};
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
@@ -81,5 +81,17 @@ fuzz_target!(|data: &[u8]| {
         let mut tiny_buf = [0u8; 0];
         let res = engine.decode_into(payload, &mut tiny_buf);
         assert_eq!(res, Err(Error::BufferTooSmall));
+    }
+
+    // ----------------------------------------------------------------------
+    // 5. Monero block encoding: fixed-width blocks make decoding canonical too
+    // ----------------------------------------------------------------------
+    let xmr_encoded = xmr::encode(payload).unwrap();
+    assert_eq!(xmr::decode(&xmr_encoded).unwrap(), payload);
+
+    match xmr::decode(payload) {
+        Ok(decoded) => assert_eq!(xmr::encode(&decoded).unwrap().as_bytes(), payload),
+        Err(Error::InvalidCharacter) => {}
+        Err(e) => panic!("xmr decode returned {:?}", e),
     }
 });

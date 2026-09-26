@@ -63,6 +63,11 @@
 //!     and `base58-monero` (see `tests/`).
 //! *   **Fuzzing:** `fuzz/fuzz_targets/fuzz_all_modes.rs` exercises encode/decode
 //!     round-trips via `cargo fuzz`.
+//!
+//! **Not constant-time.** Running time depends on the data (leading zeros,
+//! output length, where an invalid character sits), and stack scratch is not
+//! zeroed afterwards. Do not use it on secret material, such as private keys,
+//! where timing or memory disclosure matters.
 
 #![cfg_attr(not(any(feature = "std", test)), no_std)]
 #![doc(issue_tracker_base_url = "https://github.com/hacer-bark/base58-turbo/issues/")]
@@ -75,8 +80,8 @@ struct ReadmeDoctests;
 
 pub mod xmr;
 
-pub mod decode;
-pub mod encode;
+mod decode;
+mod encode;
 
 use decode::decode_slice;
 #[cfg(feature = "std")]
@@ -91,6 +96,7 @@ use encode::encode_slice_unbounded;
 
 /// Errors that can occur during Base58 encoding or decoding operations or alphabet creation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Error {
     /// An invalid character was encountered (not in the alphabet).
     InvalidCharacter,
@@ -116,8 +122,7 @@ impl core::fmt::Display for Error {
     }
 }
 
-#[cfg(feature = "std")]
-impl std::error::Error for Error {}
+impl core::error::Error for Error {}
 
 // ======================================================================
 // Configuration & Types
@@ -127,7 +132,7 @@ impl std::error::Error for Error {}
 ///
 /// Only [`Config::new`] builds one, so the kernels can rely on the tables being
 /// consistent with the alphabet.
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct Config {
     alphabet: [u8; 58],
     decode_map: [u8; 256],
@@ -186,6 +191,18 @@ impl Config {
     }
 }
 
+// Only the alphabet: the lookup tables are derived from it and run to ~35 KB.
+impl core::fmt::Debug for Config {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Config")
+            .field(
+                "alphabet",
+                &format_args!("{}", self.alphabet.escape_ascii()),
+            )
+            .finish_non_exhaustive()
+    }
+}
+
 /// Sentinel stored in `Config::lut_58_pow` for a byte outside the alphabet.
 ///
 /// A valid entry is at most `57 * 58^3 = 11_121_384`, so the sum of any four is
@@ -193,6 +210,21 @@ impl Config {
 /// and at most `2^30`. One test of the bits from 26 up therefore validates a
 /// whole group of four characters, with no per-character branch.
 pub(crate) const BAD_DIGIT: u32 = 1 << 28;
+
+/// Powers of 58, from 58^0 up to 58^10, the largest that fits a u64.
+pub(crate) const POW_58: [u64; 11] = {
+    let mut table = [1u64; 11];
+    let mut i = 1;
+    while i < 11 {
+        table[i] = table[i - 1] * 58;
+        i += 1;
+    }
+    table
+};
+
+pub(crate) const RADIX_58_4: u64 = POW_58[4];
+pub(crate) const RADIX_58_5: u64 = POW_58[5];
+pub(crate) const RADIX_58_10: u64 = POW_58[10];
 
 /// Builds the decode weight table: `[k][b] = digit(b) * 58^k` for `k` in 0..4.
 const fn gen_lut_pow(map: &[u8; 256]) -> [[u32; 256]; 4] {
@@ -231,28 +263,24 @@ pub struct Engine {
 // ======================================================================
 
 /// Standard Bitcoin Base58 Engine.
-pub const BITCOIN: Engine =
+pub static BITCOIN: Engine =
     match Engine::new(b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz") {
         Ok(e) => e,
         Err(_) => panic!("Invalid Bitcoin alphabet definition"),
     };
 
-/// Monero Base58 Engine.
-pub const MONERO: Engine =
-    match Engine::new(b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz") {
-        Ok(e) => e,
-        Err(_) => panic!("Invalid Monero alphabet definition"),
-    };
+/// Monero Base58 Engine. Monero uses the Bitcoin alphabet.
+pub static MONERO: Engine = BITCOIN;
 
 /// Ripple Base58 Engine.
-pub const RIPPLE: Engine =
+pub static RIPPLE: Engine =
     match Engine::new(b"rpshnaf39wBUDNEGHJKLM4PQRST7VWXYZ2bcdeCg65jkm8oFqi1tuvAxyz") {
         Ok(e) => e,
         Err(_) => panic!("Invalid Ripple alphabet definition"),
     };
 
 /// Flickr Base58 Engine.
-pub const FLICKR: Engine =
+pub static FLICKR: Engine =
     match Engine::new(b"123456789abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ") {
         Ok(e) => e,
         Err(_) => panic!("Invalid Flickr alphabet definition"),
